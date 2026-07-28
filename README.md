@@ -229,7 +229,11 @@ El proyecto contempla pruebas para verificar:
 
 # Licencia
 
-> Pendiente de definir por el equipo de desarrollo.
+Este proyecto se distribuye bajo la **Licencia MIT**, lo que permite a cualquier persona utilizar, copiar, modificar, fusionar, publicar, distribuir, sublicenciar y/o vender copias del software, siempre que se incluya el aviso de copyright y la licencia original.
+
+Para más información, consulte el archivo **LICENSE** incluido en este repositorio.
+
+**Copyright (c) 2026 Federico Gis**
 
 ---
 

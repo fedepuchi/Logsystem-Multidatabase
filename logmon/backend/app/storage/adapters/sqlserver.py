@@ -41,9 +41,9 @@ class SqlServerAdapter:
         self._conn: Optional["pymssql.Connection"] = None
         self._lock = threading.Lock()
 
-    # ------------------------------------------------------------------ #
-    # Conexión                                                          #
-    # ------------------------------------------------------------------ #
+   
+    
+
     def _get_conn_sync(self) -> "pymssql.Connection":
         if self._conn is None:
             self._conn = pymssql.connect(
@@ -67,9 +67,7 @@ class SqlServerAdapter:
     async def close(self) -> None:
         await anyio.to_thread.run_sync(self._close_sync)
 
-    # ------------------------------------------------------------------ #
-    # ensure_schema                                                     #
-    # ------------------------------------------------------------------ #
+    
     def _ensure_schema_sync(self) -> None:
         with self._lock:
             conn = self._get_conn_sync()
@@ -146,9 +144,7 @@ class SqlServerAdapter:
     async def ensure_schema(self) -> None:
         await anyio.to_thread.run_sync(self._ensure_schema_sync)
 
-    # ------------------------------------------------------------------ #
-    # ping                                                              #
-    # ------------------------------------------------------------------ #
+    
     def _ping_sync(self) -> bool:
         with self._lock:
             conn = self._get_conn_sync()
@@ -160,9 +156,7 @@ class SqlServerAdapter:
     async def ping(self) -> bool:
         return await anyio.to_thread.run_sync(self._ping_sync)
 
-    # ------------------------------------------------------------------ #
-    # save                                                              #
-    # ------------------------------------------------------------------ #
+    
     def _save_sync(self, record: LogRecord) -> None:
         with self._lock:
             conn = self._get_conn_sync()
@@ -208,9 +202,7 @@ class SqlServerAdapter:
     async def save(self, record: LogRecord) -> None:
         await anyio.to_thread.run_sync(self._save_sync, record)
 
-    # ------------------------------------------------------------------ #
-    # query                                                             #
-    # ------------------------------------------------------------------ #
+   
     def _query_sync(self, filters: LogFilters) -> List[LogRecord]:
         clauses: List[str] = []
         params: List[Any] = []
@@ -281,9 +273,7 @@ class SqlServerAdapter:
     async def query(self, filters: LogFilters) -> List[LogRecord]:
         return await anyio.to_thread.run_sync(self._query_sync, filters)
 
-    # ------------------------------------------------------------------ #
-    # get                                                               #
-    # ------------------------------------------------------------------ #
+   
     def _get_sync(self, log_id: str) -> Optional[LogRecord]:
         with self._lock:
             conn = self._get_conn_sync()
@@ -326,9 +316,7 @@ class SqlServerAdapter:
     async def get(self, log_id: str) -> Optional[LogRecord]:
         return await anyio.to_thread.run_sync(self._get_sync, log_id)
 
-    # ------------------------------------------------------------------ #
-    # helpers                                                           #
-    # ------------------------------------------------------------------ #
+    
     @staticmethod
     def _row_to_record(row: Dict[str, Any], steps: List[LogStep]) -> LogRecord:
         fecha = row["fecha"]

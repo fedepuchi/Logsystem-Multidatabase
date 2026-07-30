@@ -68,12 +68,54 @@ export interface Source {
   connection_id: string | null;
 }
 
+export interface LogStepInput {
+  orden: number;
+  tipo: StepType;
+  contenido: string;
+  duration_ms?: number | null;
+}
+
+/** Payload de ingesta: el id (ULID) y los derivados los pone el servidor. */
+export interface LogCreateInput {
+  source_id: string;
+  parent_type: ParentType;
+  entrada: string;
+  resultado: string;
+  metodo: string;
+  fecha?: string;
+  steps: LogStepInput[];
+}
+
+export interface LogCreated {
+  message: string;
+  id: string;
+  connection_id: string;
+  estado: Estado;
+  tiempo_ms: number;
+}
+
+export interface SourceHistory {
+  source: string;
+  connections: string[];
+  audit: {
+    id: number;
+    source_id: string;
+    from_connection_id: string | null;
+    to_connection_id: string;
+    status: "OK" | "ABORTED";
+    detail: string | null;
+    created_at: string;
+  }[];
+}
+
 export interface LogQuery {
   source?: string;
   estado?: Estado;
   metodo?: string;
   fecha_inicio?: string;
   fecha_fin?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface TestResult {
@@ -156,7 +198,7 @@ export const connectionsApi = {
     }),
 
   remove: (id: string) =>
-    request<{ message: string }>(`/api/connections/${encodeURIComponent(id)}`, {
+    request<void>(`/api/connections/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
 
@@ -177,10 +219,14 @@ export const sourcesApi = {
       body: JSON.stringify(data),
     }),
 
-  remove: (name: string) =>
-    request<{ message: string }>(`/api/sources/${encodeURIComponent(name)}`, {
-      method: "DELETE",
-    }),
+  remove: (name: string, force = false) =>
+    request<void>(
+      `/api/sources/${encodeURIComponent(name)}${force ? "?force=true" : ""}`,
+      { method: "DELETE" },
+    ),
+
+  history: (name: string) =>
+    request<SourceHistory>(`/api/sources/${encodeURIComponent(name)}/history`),
 
   switch: (name: string, connectionId: string) =>
     request<{ message: string; source: Source }>(
@@ -201,14 +247,14 @@ export const logsApi = {
       `/api/logs/${encodeURIComponent(id)}${buildQuery({ conn: connectionId })}`,
     ),
 
-  create: (record: LogRecord) =>
-    request<{ message: string }>("/api/logs", {
+  create: (input: LogCreateInput) =>
+    request<LogCreated>("/api/logs", {
       method: "POST",
-      body: JSON.stringify(record),
+      body: JSON.stringify(input),
     }),
 
   demo: () =>
-    request<{ message: string }>("/api/logs/demo", {
+    request<{ message: string; result: Record<string, unknown> }>("/api/logs/demo", {
       method: "POST",
     }),
 };

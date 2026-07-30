@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,10 +23,25 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _resolve_static_dir() -> Optional[Path]:
+    """Localiza el build del frontend.
+
+    Se prueba STATIC_DIR primero, después la ruta del repo (útil en `make dev`)
+    y por último la ruta dentro de la imagen Docker, donde PROJECT_ROOT apunta
+    a `/` y la heurística relativa no sirve.
+    """
+
     settings = get_settings()
-    configured = getattr(settings, "static_dir", None)
-    candidate = Path(configured) if configured else PROJECT_ROOT / "frontend" / "dist"
-    return candidate if (candidate / "index.html").is_file() else None
+
+    candidates = []
+    if settings.static_dir:
+        candidates.append(Path(settings.static_dir))
+    candidates.append(PROJECT_ROOT / "frontend" / "dist")
+    candidates.append(Path("/app/frontend/dist"))
+
+    for candidate in candidates:
+        if (candidate / "index.html").is_file():
+            return candidate
+    return None
 
 
 @asynccontextmanager
@@ -55,10 +70,9 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    origins = getattr(settings, "cors_origins", None) or ["http://localhost:5173"]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=origins,
+        allow_origins=settings.cors_origin_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -93,6 +107,11 @@ def create_app() -> FastAPI:
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str) -> FileResponse:
+        # Sin esta guarda el catch-all devolvería index.html con 200 para
+        # cualquier ruta de API inexistente, escondiendo los 404 reales.
+        if full_path == "health" or full_path.startswith("api/"):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
         candidate = (static_root / full_path).resolve()
         if candidate.is_file() and candidate.is_relative_to(static_root):
             return FileResponse(candidate)

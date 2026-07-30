@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import ConnectionForm from "../components/ConnectionForm";
+import SourceAssign from "../components/SourceAssign";
+import SwitchControl from "../components/SwitchControl";
 import {
   ApiError,
   connectionsApi,
@@ -16,8 +18,6 @@ export default function Dashboard() {
   const [sources, setSources] = useState<Source[]>([]);
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [pendingSource, setPendingSource] = useState<string | null>(null);
-  const [selection, setSelection] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -25,15 +25,6 @@ export default function Dashboard() {
       const [conns, srcs] = await Promise.all([connectionsApi.list(), sourcesApi.list()]);
       setConnections(conns);
       setSources(srcs);
-      setSelection((prev) => {
-        const next: Record<string, string> = { ...prev };
-        for (const source of srcs) {
-          if (!next[source.name]) {
-            next[source.name] = source.connection_id ?? "";
-          }
-        }
-        return next;
-      });
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "No se pudieron cargar los datos";
       setFeedback({ kind: "error", message });
@@ -45,6 +36,10 @@ export default function Dashboard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  function reportError(message: string) {
+    setFeedback({ kind: "error", message });
+  }
 
   async function handleTest(connectionId: string) {
     setFeedback(null);
@@ -69,33 +64,14 @@ export default function Dashboard() {
     }
   }
 
-  async function handleSwitch(sourceName: string) {
-    const target = selection[sourceName];
-    if (!target) {
-      setFeedback({ kind: "error", message: "Elegí una conexión destino" });
-      return;
-    }
-
-    setPendingSource(sourceName);
-    setFeedback(null);
-
-    try {
-      const result = await sourcesApi.switch(sourceName, target);
-      setSources((prev) =>
-        prev.map((source) => (source.name === sourceName ? result.source : source)),
-      );
-      setFeedback({
-        kind: "ok",
-        message: `${sourceName} ahora escribe en ${target}`,
-      });
-    } catch (error) {
-      const message =
-        error instanceof ApiError ? error.message : "El cambio de base fue abortado";
-      setFeedback({ kind: "error", message });
-      await load();
-    } finally {
-      setPendingSource(null);
-    }
+  function handleSwitched(updated: Source) {
+    setSources((prev) =>
+      prev.map((source) => (source.name === updated.name ? updated : source)),
+    );
+    setFeedback({
+      kind: "ok",
+      message: `${updated.name} ahora escribe en ${updated.connection_id}`,
+    });
   }
 
   return (
@@ -159,6 +135,14 @@ export default function Dashboard() {
       </section>
 
       <section className="dashboard__section">
+        <SourceAssign
+          connections={connections}
+          onCreated={() => void load()}
+          onError={reportError}
+        />
+      </section>
+
+      <section className="dashboard__section">
         <h2>Fuentes y asignaciones</h2>
         {sources.length === 0 ? (
           <p>No hay fuentes registradas.</p>
@@ -169,8 +153,7 @@ export default function Dashboard() {
                 <th>Fuente</th>
                 <th>Tipo</th>
                 <th>Conexión actual</th>
-                <th>Cambiar a</th>
-                <th />
+                <th>Cambio de base en vivo</th>
               </tr>
             </thead>
             <tbody>
@@ -180,35 +163,12 @@ export default function Dashboard() {
                   <td>{source.parent_type}</td>
                   <td>{source.connection_id ?? "sin asignar"}</td>
                   <td>
-                    <select
-                      value={selection[source.name] ?? ""}
-                      onChange={(event) =>
-                        setSelection((prev) => ({
-                          ...prev,
-                          [source.name]: event.target.value,
-                        }))
-                      }
-                    >
-                      <option value="">Seleccionar...</option>
-                      {connections.map((connection) => (
-                        <option key={connection.id} value={connection.id}>
-                          {connection.id} — {connection.name}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      onClick={() => void handleSwitch(source.name)}
-                      disabled={
-                        pendingSource === source.name ||
-                        !selection[source.name] ||
-                        selection[source.name] === source.connection_id
-                      }
-                    >
-                      {pendingSource === source.name ? "Cambiando..." : "Cambiar base"}
-                    </button>
+                    <SwitchControl
+                      source={source}
+                      connections={connections}
+                      onSwitched={handleSwitched}
+                      onError={reportError}
+                    />
                   </td>
                 </tr>
               ))}

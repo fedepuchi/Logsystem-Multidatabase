@@ -4,7 +4,7 @@
 
 Sistema de monitoreo de logs utilizando múltiples motores de bases de datos.
 
-</div>
+> **Para levantar el proyecto y correr la demo, ver [`logmon/README.md`](logmon/README.md).**
 
 ## Descripción
 
@@ -80,10 +80,11 @@ Actualmente el sistema soporta:
 ## Backend
 
 - Python 3.12
-- FastAPI
-- Uvicorn
-- SQLAlchemy (si aplica)
-- Pydantic
+- FastAPI + Uvicorn
+- Pydantic v2 y pydantic-settings
+- Drivers nativos por motor, sin ORM: `psycopg` (PostgreSQL), `asyncmy`
+  (MariaDB), `pymssql` (SQL Server), `pymongo` (MongoDB), `redis-py` (Redis)
+  y `aiosqlite` (metadata)
 
 ## Frontend
 
@@ -206,12 +207,18 @@ logmon/
 
 | Método | Endpoint | Descripción |
 |---------|----------|-------------|
-| POST | /api/logs | Registrar log |
-| GET | /api/logs | Consultar logs |
-| GET | /api/logs/{id} | Obtener detalle |
+| POST | /api/logs | Registrar log (el ULID lo genera el servidor) |
+| GET | /api/logs | Consultar logs con merge multi-motor |
+| GET | /api/logs/{id}?conn= | Detalle con pasos, desde el motor de origen |
 | POST | /api/logs/demo | Crear datos de prueba |
-| POST | /api/sources/{id}/switch | Cambiar motor |
+| GET/POST | /api/connections | Listar y crear conexiones |
+| PUT/DELETE | /api/connections/{id} | Editar y eliminar conexiones |
 | POST | /api/connections/{id}/test | Probar conexión |
+| GET/POST | /api/sources | Listar y crear fuentes |
+| POST | /api/sources/{name}/switch | Cambiar motor en vivo |
+| GET | /api/sources/{name}/history | Historial de bindings y auditoría de switches |
+
+La documentación interactiva completa queda en http://localhost:8000/docs.
 
 # Ejemplo de Funcionamiento
 

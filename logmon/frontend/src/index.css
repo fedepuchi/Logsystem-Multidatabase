@@ -1,0 +1,381 @@
+:root {
+  --bg: #0f1117;
+  --surface: #171a23;
+  --surface-alt: #1e222d;
+  --border: #2b3040;
+  --text: #e6e8ee;
+  --text-dim: #9aa1b1;
+  --accent: #4f8cff;
+  --ok: #2ea043;
+  --ok-soft: rgba(46, 160, 67, 0.16);
+  --error: #f04747;
+  --error-soft: rgba(240, 71, 71, 0.16);
+
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-alt);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+input,
+select {
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0;
+}
+
+h2 {
+  font-size: 1.15rem;
+  margin: 0 0 0.75rem;
+}
+
+h3,
+h4 {
+  margin: 0 0 0.5rem;
+}
+
+/* ---------- layout ---------- */
+
+.app__nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.app__brand {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-right: 0.75rem;
+}
+
+.tab--active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.app__main {
+  padding: 1.5rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* ---------- dashboard ---------- */
+
+.dashboard__header,
+.log-viewer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.log-viewer__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.dashboard__section {
+  margin-bottom: 1.75rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+/* ---------- formularios ---------- */
+
+.connection-form label,
+.source-assign label,
+.filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.6rem;
+}
+
+.connection-form label span,
+.source-assign label span,
+.filters label span {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.connection-form,
+.source-assign {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0 1rem;
+  align-items: end;
+}
+
+.connection-form h2,
+.source-assign h3 {
+  grid-column: 1 / -1;
+}
+
+.connection-form__actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.switch-control {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1rem;
+  align-items: end;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  margin-bottom: 1.25rem;
+}
+
+.filters button {
+  margin-bottom: 0.6rem;
+}
+
+/* ---------- tablas ---------- */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.table th {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.table td button + button {
+  margin-left: 0.4rem;
+}
+
+.table--logs .row {
+  cursor: pointer;
+}
+
+.table--logs .row:hover {
+  background: var(--surface-alt);
+}
+
+.row--selected {
+  background: rgba(79, 140, 255, 0.12);
+}
+
+/* ---------- visor ---------- */
+
+.log-viewer__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (max-width: 1000px) {
+  .log-viewer__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.log-viewer__table {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.5rem 1rem;
+}
+
+.log-detail {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 1.25rem;
+}
+
+.log-detail--empty {
+  color: var(--text-dim);
+}
+
+.log-detail__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.log-detail__meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.3rem 0.75rem;
+  margin: 0 0 1.25rem;
+  font-size: 0.88rem;
+}
+
+.log-detail__meta dt {
+  color: var(--text-dim);
+}
+
+.log-detail__meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.steps__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-alt);
+  font-size: 0.88rem;
+}
+
+.steps__duration {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* ---------- badges ---------- */
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+/* Regla de la pizarra: ENTRADA/SALIDA verde, ERROR rojo. */
+.badge--ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.badge--error {
+  background: var(--error-soft);
+  color: var(--error);
+}
+
+.badge--db {
+  background: var(--surface-alt);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+
+.badge--db-mariadb {
+  color: #c0765a;
+  border-color: #c0765a;
+}
+
+.badge--db-postgres {
+  color: #5b9bd5;
+  border-color: #5b9bd5;
+}
+
+.badge--db-sqlserver {
+  color: #d67c7c;
+  border-color: #d67c7c;
+}
+
+.badge--db-mongo {
+  color: #5aa469;
+  border-color: #5aa469;
+}
+
+.badge--db-redis {
+  color: #e06c5e;
+  border-color: #e06c5e;
+}
+
+/* ---------- feedback ---------- */
+
+.feedback {
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  margin: 0.5rem 0;
+}
+
+.feedback--ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.feedback--error {
+  background: var(--error-soft);
+  color: var(--error);
+}

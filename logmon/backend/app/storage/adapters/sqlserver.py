@@ -40,12 +40,45 @@ class SqlServerAdapter:
         self._timeout = timeout
         self._conn: Optional["pymssql.Connection"] = None
         self._lock = threading.Lock()
+        self._database_checked = False
 
-   
-    
+    def _ensure_database_sync(self) -> None:
+        """Crea la base si no existe, conectando a ``master``.
+
+        El contenedor de SQL Server arranca sólo con las bases del sistema: sin
+        este paso, conectar directo a ``logdb`` falla y el adapter nunca llega
+        a crear el schema. Se ejecuta una única vez por adapter, antes de abrir
+        la conexión de trabajo, para que ``ping()`` también funcione.
+        """
+
+        conn = pymssql.connect(
+            server=self._host,
+            port=str(self._port),
+            user=self._user,
+            password=self._password,
+            database="master",
+            login_timeout=self._login_timeout,
+            timeout=self._timeout,
+            autocommit=True,  # CREATE DATABASE no puede correr en transacción
+        )
+        try:
+            # El nombre de la base viene del formulario de conexión, así que se
+            # escapa como identificador entre corchetes y como literal N'...'.
+            bracketed = self._database.replace("]", "]]")
+            quoted = self._database.replace("'", "''")
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"IF DB_ID(N'{quoted}') IS NULL CREATE DATABASE [{bracketed}]"
+                )
+        finally:
+            conn.close()
 
     def _get_conn_sync(self) -> "pymssql.Connection":
         if self._conn is None:
+            if not self._database_checked:
+                self._ensure_database_sync()
+                self._database_checked = True
+
             self._conn = pymssql.connect(
                 server=self._host,
                 port=str(self._port),

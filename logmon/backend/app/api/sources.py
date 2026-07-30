@@ -1,31 +1,17 @@
-from fastapi import (
-    APIRouter,
-    Depends,
-    HTTPException,
-    Response,
-    status,
-)
+from typing import Any, Dict, List
 
-from app.api.dependencies import (
-    get_storage_router,
-)
-from app.api.state import (
-    CONNECTIONS,
-    SOURCES,
-)
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+
+from app.api.dependencies import get_storage_router
+from app.metadata import repo
 from app.models import SourceIn, SwitchIn
+from app.storage.router import StorageRouter, SwitchAborted
+
+router = APIRouter(prefix="/api/sources", tags=["Sources"])
 
 
-router = APIRouter(
-    prefix="/api/sources",
-    tags=["Sources"],
-)
-
-
-def _get_source_or_404(
-    source_name: str,
-) -> dict:
-    source = SOURCES.get(source_name)
+async def _get_source_or_404(source_name: str) -> Dict[str, Any]:
+    source = await repo.get_source(source_name)
 
     if source is None:
         raise HTTPException(
@@ -37,128 +23,102 @@ def _get_source_or_404(
 
 
 @router.get("")
-async def list_sources() -> list[dict]:
-    return list(SOURCES.values())
+async def list_sources() -> List[Dict[str, Any]]:
+    return await repo.list_sources()
 
 
-@router.post(
-    "",
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_source(
-    source: SourceIn,
-) -> dict:
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_source(source: SourceIn) -> Dict[str, Any]:
     source_name = source.name.strip()
 
     if not source_name:
         raise HTTPException(
-            status_code=(
-                status.HTTP_422_UNPROCESSABLE_ENTITY
-            ),
-            detail=(
-                "El nombre de la fuente "
-                "es obligatorio"
-            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="El nombre de la fuente es obligatorio",
         )
 
-    if source_name in SOURCES:
+    if await repo.get_source(source_name) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Ya existe una fuente "
-                "con ese nombre"
-            ),
+            detail="Ya existe una fuente con ese nombre",
         )
 
-    created = {
-        "name": source_name,
-        "parent_type": source.parent_type,
-        "connection_id": None,
-    }
-
-    SOURCES[source_name] = created
-
-    return created
+    return await repo.create_source(source)
 
 
 @router.get("/{source_name}")
-async def get_source(
-    source_name: str,
-) -> dict:
-    return _get_source_or_404(source_name)
+async def get_source(source_name: str) -> Dict[str, Any]:
+    return await _get_source_or_404(source_name)
+
+
+@router.get("/{source_name}/history")
+async def get_source_history(source_name: str) -> Dict[str, Any]:
+    """Conexiones por las que pasó la fuente + auditoría de sus switches.
+
+    Es lo que respalda el visor multi-DB: sobre estas conexiones se hace el
+    fan-out de lectura.
+    """
+
+    await _get_source_or_404(source_name)
+
+    return {
+        "source": source_name,
+        "connections": await repo.binding_history(source_name),
+        "audit": await repo.list_switch_audit(source_name),
+    }
 
 
 @router.post("/{source_name}/switch")
 async def switch_source(
     source_name: str,
     switch: SwitchIn,
-    storage_router=Depends(
-        get_storage_router
-    ),
-) -> dict:
-    source = _get_source_or_404(
-        source_name
-    )
+    storage_router: StorageRouter = Depends(get_storage_router),
+) -> Dict[str, Any]:
+    await _get_source_or_404(source_name)
 
-    if switch.connection_id not in CONNECTIONS:
+    if await repo.get_connection(switch.connection_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conexión no encontrada",
         )
 
-    bind_source = getattr(
-        storage_router,
-        "bind_source",
-        None,
-    )
-
-    if not callable(bind_source):
-        raise HTTPException(
-            status_code=(
-                status.HTTP_501_NOT_IMPLEMENTED
-            ),
-            detail=(
-                "storage_router debe implementar "
-                "bind_source(source_id, connection_id)"
-            ),
-        )
-
     try:
-        result = bind_source(
-            source_name,
-            switch.connection_id,
-        )
-
-        if hasattr(result, "__await__"):
-            await result
-
-    except ValueError as exc:
+        result = await storage_router.switch(source_name, switch.connection_id)
+    except SwitchAborted as exc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
 
-    source["connection_id"] = (
-        switch.connection_id
-    )
-
     return {
-        "message": "Cambio realizado",
-        "source": source,
+        "message": (
+            f"{source_name} ahora escribe en {result['to_connection_id']}"
+        ),
+        "source": await repo.get_source(source_name),
+        "switch": result,
     }
 
 
-@router.delete(
-    "/{source_name}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
+@router.delete("/{source_name}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_source(
     source_name: str,
+    force: bool = Query(
+        default=False,
+        description="Borra la fuente aunque tenga historial de bindings",
+    ),
 ) -> Response:
-    _get_source_or_404(source_name)
+    await _get_source_or_404(source_name)
 
-    del SOURCES[source_name]
+    history = await repo.binding_history(source_name)
+    if history and not force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"La fuente escribió en {', '.join(history)}. "
+                "Borrarla oculta esos logs del visor; repetí con ?force=true si es lo que querés."
+            ),
+        )
 
-    return Response(
-        status_code=status.HTTP_204_NO_CONTENT
-    )
+    await repo.delete_source(source_name)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

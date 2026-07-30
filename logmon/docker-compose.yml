@@ -1,15 +1,18 @@
+# Los ${VAR:-default} se interpolan desde el .env de esta carpeta (compose lo
+# carga solo). Si no existe .env, valen los defaults y el stack levanta igual.
+
 services:
 
   mariadb:
     image: mariadb:11
     container_name: logmon_mariadb
     environment:
-      MARIADB_ROOT_PASSWORD: root123
-      MARIADB_DATABASE: logdb
-      MARIADB_USER: loguser
-      MARIADB_PASSWORD: logpass
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-root123}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-logdb}
+      MARIADB_USER: ${MARIADB_USER:-loguser}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-logpass}
     ports:
-      - "3306:3306" #Revisar Puertos
+      - "3306:3306"
     volumes:
       - mariadb_data:/var/lib/mysql
     networks:
@@ -20,14 +23,13 @@ services:
       timeout: 5s
       retries: 10
 
-
   postgres:
     image: postgres:16
     container_name: logmon_postgres
     environment:
-      POSTGRES_DB: logdb
-      POSTGRES_USER: loguser
-      POSTGRES_PASSWORD: logpass
+      POSTGRES_DB: ${POSTGRES_DB:-logdb}
+      POSTGRES_USER: ${POSTGRES_USER:-loguser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-logpass}
     ports:
       - "5432:5432"
     volumes:
@@ -35,18 +37,21 @@ services:
     networks:
       - logmon-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U loguser -d logdb"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-loguser} -d ${POSTGRES_DB:-logdb}"]
       interval: 10s
       timeout: 5s
       retries: 10
 
-
+  # azure-sql-edge tiene imagen arm64 nativa, así que la demo corre fluida en
+  # Mac Apple Silicon. Para fidelidad total con SQL Server, reemplazar por:
+  #   image: mcr.microsoft.com/mssql/server:2022-latest
+  #   platform: linux/amd64
   sqlserver:
     image: mcr.microsoft.com/azure-sql-edge
     container_name: logmon_sqlserver
     environment:
       ACCEPT_EULA: "1"
-      MSSQL_SA_PASSWORD: "Alec2026!SecureSQL"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Alec2026!SecureSQL}
     ports:
       - "1433:1433"
     volumes:
@@ -54,15 +59,14 @@ services:
     networks:
       - logmon-network
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python3 -c \"import socket; socket.create_connection(('localhost',1433),5)\""
-        ]
+      # azure-sql-edge no trae sqlcmd ni garantiza python3, así que se prueba
+      # el puerto con el /dev/tcp de bash. Ojo: "healthy" acá sólo significa
+      # que acepta TCP; la base logdb la crea SqlServerAdapter.
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/1433'"]
       interval: 15s
       timeout: 10s
-      retries: 10
-
+      retries: 20
+      start_period: 30s
 
   mongo:
     image: mongo:7
@@ -74,17 +78,10 @@ services:
     networks:
       - logmon-network
     healthcheck:
-      test:
-        [
-          "CMD",
-          "mongosh",
-          "--eval",
-          "db.adminCommand('ping')"
-        ]
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
       retries: 10
-
 
   redis:
     image: redis:7
@@ -97,75 +94,86 @@ services:
     networks:
       - logmon-network
     healthcheck:
-      test:
-        [
-          "CMD",
-          "redis-cli",
-          "ping"
-        ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 10
-
-
 
   backend:
     build:
-      context: ./backend
-
+      # El contexto es logmon/ porque la imagen también compila el SPA.
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: logmon_backend
-
-    environment:
-      WEB_CONCURRENCY: 1
-
     ports:
       - "8000:8000"
-
     networks:
       - logmon-network
+    volumes:
+      # La metadata (conexiones, fuentes, historial de bindings y auditoría)
+      # tiene que sobrevivir a los reinicios: es la fuente de verdad.
+      - meta_data:/app/data
+    environment:
+      WEB_CONCURRENCY: 1
+      SQLITE_PATH: /app/data/logmon.db
+      STATIC_DIR: /app/frontend/dist
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
 
+      MARIADB_HOST: mariadb
+      MARIADB_PORT: 3306
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-logdb}
+      MARIADB_USER: ${MARIADB_USER:-loguser}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-logpass}
+
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-logdb}
+      POSTGRES_USER: ${POSTGRES_USER:-loguser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-logpass}
+
+      SQLSERVER_HOST: sqlserver
+      SQLSERVER_PORT: 1433
+      SQLSERVER_USER: ${SQLSERVER_USER:-sa}
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Alec2026!SecureSQL}
+      SQLSERVER_DATABASE: ${SQLSERVER_DATABASE:-logdb}
+
+      MONGO_HOST: mongo
+      MONGO_PORT: 27017
+      MONGO_DATABASE: ${MONGO_DATABASE:-logdb}
+      MONGO_USER: ${MONGO_USER:-}
+      MONGO_PASSWORD: ${MONGO_PASSWORD:-}
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_USER: ${REDIS_USER:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     depends_on:
-
       mariadb:
         condition: service_healthy
-
       postgres:
         condition: service_healthy
-
       sqlserver:
         condition: service_healthy
-
       mongo:
         condition: service_healthy
-
       redis:
         condition: service_healthy
-
     healthcheck:
-      test:
-        [
-          "CMD",
-          "curl",
-          "-f",
-          "http://localhost:8000/health" #Esto falta ajustarlo a la ruta de healthcheck que tengas en tu backend
-        ]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 10
 
-
-
 volumes:
-
   mariadb_data:
   pg_data:
   mssql_data:
   mongo_data:
   redis_data:
-  # meta_data:  # TODO: definir uso  y montarlo en backend cuando se sepa el path
-
+  meta_data:
 
 networks:
-
   logmon-network:
     driver: bridge

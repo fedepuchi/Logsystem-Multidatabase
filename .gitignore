@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Configuración local con credenciales (se versiona .env.example)
+.env
+
+# Metadata SQLite generada por `make dev` / `make seed-dev`
+logmon/backend/data/
+
+# macOS
+.DS_Store

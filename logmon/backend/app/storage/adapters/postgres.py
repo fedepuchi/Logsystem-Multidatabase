@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote_plus
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -50,6 +51,7 @@ class PostgresAdapter:
         database: str,
         pool_minsize: int = 1,
         pool_maxsize: int = 10,
+        connect_timeout: int = 5,
     ) -> None:
         self._host = host
         self._port = port
@@ -58,24 +60,34 @@ class PostgresAdapter:
         self._database = database
         self._pool_minsize = pool_minsize
         self._pool_maxsize = pool_maxsize
+        self._connect_timeout = connect_timeout
         self._pool: Optional[AsyncConnectionPool] = None
 
     def _dsn(self) -> str:
         return (
-            f"postgresql://{self._user}:{self._password}"
+            f"postgresql://{quote_plus(self._user)}:{quote_plus(self._password)}"
             f"@{self._host}:{self._port}/{self._database}"
+            f"?connect_timeout={self._connect_timeout}"
         )
 
     async def _get_pool(self) -> AsyncConnectionPool:
         if self._pool is None:
-            self._pool = AsyncConnectionPool(
+            pool = AsyncConnectionPool(
                 conninfo=self._dsn(),
                 min_size=self._pool_minsize,
                 max_size=self._pool_maxsize,
                 open=False,
                 kwargs={"row_factory": dict_row},
             )
-            await self._pool.open(wait=True)
+            try:
+                # Sin timeout explícito psycopg espera 30s reintentando. El
+                # switch valida el destino con el lock de la fuente tomado, así
+                # que una base caída bloquearía las escrituras todo ese rato.
+                await pool.open(wait=True, timeout=self._connect_timeout)
+            except Exception:
+                await pool.close()
+                raise
+            self._pool = pool
         return self._pool
 
     async def close(self) -> None:

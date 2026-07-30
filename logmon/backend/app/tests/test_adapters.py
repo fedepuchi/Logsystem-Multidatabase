@@ -21,7 +21,7 @@ def _env(name: str, default: str) -> str:
 
 
 def _postgres_factory() -> Any:
-    from app.storage.adapters.postgres import PostgresAdapter
+    from app.storage.adapters.PostgresAdapter import PostgresAdapter
 
     return PostgresAdapter(
         host=_env("POSTGRES_HOST", "localhost"),
@@ -33,7 +33,7 @@ def _postgres_factory() -> Any:
 
 
 def _mariadb_factory() -> Any:
-    from app.storage.adapters.mariadb import MariaDbAdapter
+    from app.storage.adapters.MariaDbAdapter import MariaDbAdapter
 
     return MariaDbAdapter(
         host=_env("MARIADB_HOST", "localhost"),
@@ -45,7 +45,7 @@ def _mariadb_factory() -> Any:
 
 
 def _sqlserver_factory() -> Any:
-    from app.storage.adapters.sqlserver import SqlServerAdapter
+    from app.storage.adapters.SqlServerAdapter import SqlServerAdapter
 
     return SqlServerAdapter(
         host=_env("SQLSERVER_HOST", "localhost"),

@@ -1,113 +1,218 @@
-from fastapi import APIRouter, HTTPException
+from uuid import uuid4
 
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    Response,
+    status,
+)
+
+from app.api.state import CONNECTIONS, SOURCES
 from app.models import ConnectionIn
+
 
 router = APIRouter(
     prefix="/api/connections",
-    tags=["Connections"]
+    tags=["Connections"],
 )
 
-# Temporal mientras se implementa metadata/repo.py
-connections = []
 
-@router.get("")
-async def list_connections():
-    return connections
+def _public_connection(
+    connection: dict,
+) -> dict:
+    """
+    Elimina la contraseña antes de devolver
+    la conexión al frontend.
+    """
 
-@router.post("")
-async def create_connection(connection: ConnectionIn):
-
-    nueva = {
-        "id": f"C{len(connections)+1}",
-        "name": connection.name,
-        "engine": connection.engine,
-        "host": connection.host,
-        "port": connection.port,
-        "user": connection.user,
-        "database": connection.database
+    return {
+        key: value
+        for key, value in connection.items()
+        if key != "password"
     }
 
-    connections.append(nueva)
 
-    return nueva
+def _get_connection_or_404(
+    connection_id: str,
+) -> dict:
+    connection = CONNECTIONS.get(connection_id)
+
+    if connection is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conexión no encontrada",
+        )
+
+    return connection
+
+
+@router.get("")
+async def list_connections() -> list[dict]:
+    return [
+        _public_connection(connection)
+        for connection in CONNECTIONS.values()
+    ]
+
+
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_connection(
+    connection: ConnectionIn,
+) -> dict:
+    normalized_name = connection.name.strip()
+
+    if not normalized_name:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_422_UNPROCESSABLE_ENTITY
+            ),
+            detail=(
+                "El nombre de la conexión "
+                "es obligatorio"
+            ),
+        )
+
+    repeated_name = any(
+        current["name"].casefold()
+        == normalized_name.casefold()
+        for current in CONNECTIONS.values()
+    )
+
+    if repeated_name:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Ya existe una conexión "
+                "con ese nombre"
+            ),
+        )
+
+    connection_id = (
+        f"C{uuid4().hex[:8].upper()}"
+    )
+
+    created = {
+        "id": connection_id,
+        "name": normalized_name,
+        "engine": (
+            connection.engine
+            .strip()
+            .lower()
+        ),
+        "host": connection.host.strip(),
+        "port": connection.port,
+        "user": connection.user.strip(),
+        "password": connection.password,
+        "database": connection.database.strip(),
+    }
+
+    CONNECTIONS[connection_id] = created
+
+    return _public_connection(created)
+
 
 @router.get("/{connection_id}")
-async def get_connection(connection_id: str):
-
-    for connection in connections:
-        if connection["id"] == connection_id:
-            return connection
-
-    raise HTTPException(
-        status_code=404,
-        detail="Conexión no encontrada"
+async def get_connection(
+    connection_id: str,
+) -> dict:
+    connection = _get_connection_or_404(
+        connection_id
     )
+
+    return _public_connection(connection)
+
 
 @router.put("/{connection_id}")
 async def update_connection(
     connection_id: str,
-    connection: ConnectionIn
-):
+    connection: ConnectionIn,
+) -> dict:
+    _get_connection_or_404(connection_id)
 
-    for index, current in enumerate(connections):
+    normalized_name = connection.name.strip()
 
-        if current["id"] == connection_id:
-
-            connections[index] = {
-                "id": connection_id,
-                "name": connection.name,
-                "engine": connection.engine,
-                "host": connection.host,
-                "port": connection.port,
-                "user": connection.user,
-                "database": connection.database
-            }
-
-            return connections[index]
-
-    raise HTTPException(
-        status_code=404,
-        detail="Conexión no encontrada"
+    repeated_name = any(
+        current_id != connection_id
+        and current["name"].casefold()
+        == normalized_name.casefold()
+        for current_id, current
+        in CONNECTIONS.items()
     )
 
-@router.delete("/{connection_id}")
-async def delete_connection(connection_id: str):
+    if repeated_name:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Ya existe una conexión "
+                "con ese nombre"
+            ),
+        )
 
-    for index, current in enumerate(connections):
+    updated = {
+        "id": connection_id,
+        "name": normalized_name,
+        "engine": (
+            connection.engine
+            .strip()
+            .lower()
+        ),
+        "host": connection.host.strip(),
+        "port": connection.port,
+        "user": connection.user.strip(),
+        "password": connection.password,
+        "database": connection.database.strip(),
+    }
 
-        if current["id"] == connection_id:
+    CONNECTIONS[connection_id] = updated
 
-            connections.pop(index)
+    return _public_connection(updated)
 
-            return {
-                "message": "Conexión eliminada"
-            }
 
-    raise HTTPException(
-        status_code=404,
-        detail="Conexión no encontrada"
+@router.delete(
+    "/{connection_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_connection(
+    connection_id: str,
+) -> Response:
+    _get_connection_or_404(connection_id)
+
+    connection_in_use = any(
+        source.get("connection_id")
+        == connection_id
+        for source in SOURCES.values()
     )
+
+    if connection_in_use:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "La conexión está asignada "
+                "a una fuente y no puede eliminarse"
+            ),
+        )
+
+    del CONNECTIONS[connection_id]
+
+    return Response(
+        status_code=status.HTTP_204_NO_CONTENT
+    )
+
 
 @router.post("/{connection_id}/test")
-async def test_connection(connection_id: str):
+async def test_connection(
+    connection_id: str,
+) -> dict:
+    _get_connection_or_404(connection_id)
 
-    for connection in connections:
-
-        if connection["id"] == connection_id:
-
-            # Aquí luego irá:
-            #
-            # adapter = registry.get(connection_id)
-            # ok = await adapter.ping()
-
-            return {
-                "success": True,
-                "message": "Conexión simulada correctamente"
-            }
 
     raise HTTPException(
-        status_code=404,
-        detail="Conexión no encontrada"
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=(
+            "La prueba real de conexión queda "
+            "pendiente de integrar con el registry "
+            "de adapters de la capa storage."
+        ),
     )
-
-

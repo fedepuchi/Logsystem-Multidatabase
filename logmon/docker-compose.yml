@@ -103,7 +103,7 @@ services:
     build:
       # El contexto es logmon/ porque la imagen también compila el SPA.
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: Dockerfile
     container_name: logmon_backend
     ports:
       - "8000:8000"

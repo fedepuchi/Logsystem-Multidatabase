@@ -38,6 +38,7 @@ export default function LogViewer() {
   const [selected, setSelected] = useState<LogSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
 
   useEffect(() => {
     Promise.all([connectionsApi.list(), sourcesApi.list()])
@@ -80,6 +81,18 @@ export default function LogViewer() {
     void loadLogs();
   }, [loadLogs]);
 
+  useEffect(() => {
+    if (!autoRefresh) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      void loadLogs();
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [autoRefresh, loadLogs]);
+
   async function handleDemo() {
     setError(null);
     try {
@@ -106,6 +119,14 @@ export default function LogViewer() {
           <button type="button" onClick={() => void loadLogs()} disabled={loading}>
             {loading ? "Cargando..." : "Refrescar"}
           </button>
+          <label className="log-viewer__auto-refresh">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(event) => setAutoRefresh(event.target.checked)}
+            />
+            <span>Actualizar automáticamente</span>
+          </label>
         </div>
       </header>
 

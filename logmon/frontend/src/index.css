@@ -379,3 +379,14 @@ h4 {
   background: var(--error-soft);
   color: var(--error);
 }
+
+.estado-tabla {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.25rem;
+  font-size: 0.9rem;
+  color: var(--text-dim);
+}
+
+.estado-tabla--error {
+  color: var(--error);
+}

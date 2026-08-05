@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import json
+import random
+import statistics
+import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+
+
+@dataclass
+class Resultado:
+    enviados: int = 0
+    fallidos: int = 0
+    descartados: int = 0
+    latencias_ms: list = field(default_factory=list)
+
+
+PARENT_TYPES = ["API", "WEB", "SISTEMA"]
+METODOS = ["GET", "POST", "PUT", "DELETE"]
+
+
+def construir_payload(source_id: str) -> dict:
+    """Arma un LogCreate válido según app/models.py (LogCreate)."""
+    return {
+        "source_id": source_id,
+        "parent_type": random.choice(PARENT_TYPES),
+        "entrada": "GET /bench" if random.random() > 0.5 else "POST /bench",
+        "resultado": "ok",
+        "metodo": random.choice(METODOS),
+        "steps": [
+            {"orden": 1, "tipo": "ENTRADA", "contenido": "payload recibido", "duration_ms": random.randint(1, 15)},
+            {"orden": 2, "tipo": "SALIDA", "contenido": "200 OK", "duration_ms": random.randint(1, 15)},
+        ],
+    }
+
+
+def enviar_log(url: str, source_id: str, timeout: float) -> tuple[bool, float]:
+    """Manda un POST /api/logs. Devuelve (ok, latencia_ms)."""
+    payload = json.dumps(construir_payload(source_id)).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    t0 = time.perf_counter()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read()
+            ok = 200 <= resp.status < 300
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+        ok = False
+    latencia_ms = (time.perf_counter() - t0) * 1000
+    return ok, latencia_ms
+
+
+def correr_benchmark(
+    base_url: str,
+    rate: float,
+    duration: float,
+    sources: list[str],
+    max_workers: int,
+    timeout: float,
+) -> Resultado:
+    url = base_url.rstrip("/") + "/api/logs"
+    resultado = Resultado()
+    intervalo = 1.0 / rate
+
+    
+    tolerancia_s = max(0.5, intervalo * 5)
+
+    inicio = time.perf_counter()
+    total_programados = int(rate * duration)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        pendientes: list[concurrent.futures.Future] = []
+        for i in range(total_programados):
+            objetivo = inicio + i * intervalo
+            ahora = time.perf_counter()
+            espera = objetivo - ahora
+
+            if espera < -tolerancia_s:
+      
+                resultado.descartados += 1
+                continue
+
+            if espera > 0:
+                time.sleep(espera)
+
+            source_id = sources[i % len(sources)]
+            pendientes.append(pool.submit(enviar_log, url, source_id, timeout))
+
+            
+            if len(pendientes) >= max_workers * 4:
+                pendientes = _drenar(pendientes, resultado)
+
+        _drenar(pendientes, resultado, esperar_todo=True)
+
+    resultado.duracion_real = time.perf_counter() - inicio  # type: ignore[attr-defined]
+    return resultado
+
+
+def _drenar(
+    futuros: list[concurrent.futures.Future],
+    resultado: Resultado,
+    esperar_todo: bool = False,
+) -> list[concurrent.futures.Future]:
+    restantes = []
+    for f in futuros:
+        if esperar_todo or f.done():
+            try:
+                ok, latencia_ms = f.result()
+            except Exception:
+                ok, latencia_ms = False, 0.0
+            if ok:
+                resultado.enviados += 1
+                resultado.latencias_ms.append(latencia_ms)
+            else:
+                resultado.fallidos += 1
+        else:
+            restantes.append(f)
+    return restantes
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--url", default="http://localhost:8000", help="Base de LogMon (default: http://localhost:8000)")
+    ap.add_argument("--rate", type=float, required=True, help="Logs por segundo objetivo")
+    ap.add_argument("--duration", type=float, default=30, help="Duración del test en segundos (default: 30)")
+    ap.add_argument(
+        "--sources",
+        default="APP1",
+        help="Fuentes separadas por coma (default: APP1). Ej: APP1,APP2,SIS3 para repartir entre varios motores.",
+    )
+    ap.add_argument("--workers", type=int, default=None, help="Threads concurrentes (default: rate*2, min 4)")
+    ap.add_argument("--timeout", type=float, default=5.0, help="Timeout por request en segundos (default: 5)")
+    args = ap.parse_args()
+
+    sources = [s.strip() for s in args.sources.split(",") if s.strip()]
+    workers = args.workers or max(4, int(args.rate * 2))
+
+    print(f"Tasa objetivo: {args.rate}/s | Duración: {args.duration}s | Fuentes: {sources} | Workers: {workers}")
+    print("Corriendo...", file=sys.stderr)
+
+    r = correr_benchmark(args.url, args.rate, args.duration, sources, workers, args.timeout)
+    duracion_real = getattr(r, "duracion_real", args.duration)
+    tasa_real = r.enviados / duracion_real if duracion_real > 0 else 0.0
+
+    print()
+    print("=== Resultado ===")
+    print(f"Tasa configurada : {args.rate:.1f} logs/s")
+    print(f"Tasa real        : {tasa_real:.2f} logs/s")
+    print(f"Enviados (2xx)   : {r.enviados}")
+    print(f"Fallidos         : {r.fallidos}")
+    print(f"Descartados      : {r.descartados}")
+    if r.latencias_ms:
+        print(f"Latencia p50     : {statistics.median(r.latencias_ms):.1f} ms")
+        print(f"Latencia p95     : {sorted(r.latencias_ms)[int(len(r.latencias_ms) * 0.95) - 1]:.1f} ms")
+    print()
+    print("Fila para la tabla (bench/README.md):")
+    print(
+        f"| {args.rate:.0f} | {len(sources)} | {tasa_real:.2f} | {r.fallidos} | {r.descartados} |"
+    )
+
+
+if __name__ == "__main__":
+    main()

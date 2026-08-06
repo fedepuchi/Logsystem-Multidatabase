@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import AdminKeyBar from "./components/AdminKeyBar";
 import Dashboard from "./pages/Dashboard";
 import LogViewer from "./pages/LogViewer";
 
@@ -7,6 +8,10 @@ type Tab = "dashboard" | "logs";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
+
+  // Cambiar la clave de admin cambia quién es el que pregunta: se remonta la
+  // página para que vuelva a pedir todo con la credencial nueva.
+  const [authVersion, setAuthVersion] = useState(0);
 
   return (
     <div className="app">
@@ -26,9 +31,11 @@ export default function App() {
         >
           Visualizar logs
         </button>
+
+        <AdminKeyBar onChanged={() => setAuthVersion((version) => version + 1)} />
       </nav>
 
-      <main className="app__main">
+      <main className="app__main" key={authVersion}>
         {tab === "dashboard" ? <Dashboard /> : <LogViewer />}
       </main>
     </div>

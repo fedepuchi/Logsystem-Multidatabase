@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api import connections as connections_api
 from app.api import logs as logs_api
 from app.api import sources as sources_api
+from app.api.auth import ADMIN_HEADER, INGEST_HEADER, auth_enabled
 from app.config import get_settings
 from app.metadata.db import close_metadata_db, init_metadata_db
 from app.storage.router import storage_router
@@ -44,9 +45,43 @@ def _resolve_static_dir() -> Optional[Path]:
     return None
 
 
+def _check_auth_configuration() -> None:
+    """Modo abierto sólo en desarrollo, y siempre avisando.
+
+    Sin ADMIN_API_KEY la API queda sin autenticación en las dos superficies: es
+    cómodo para levantar la demo con un comando, pero irse a producción así
+    sería publicar las credenciales de los cinco motores. Preferimos no
+    arrancar antes que arrancar abierto sin que nadie se entere.
+    """
+
+    settings = get_settings()
+
+    if auth_enabled():
+        logger.info(
+            "auth activa: administración con %s, ingesta con %s por fuente",
+            ADMIN_HEADER,
+            INGEST_HEADER,
+        )
+        return
+
+    if settings.app_env.strip().lower() != "development":
+        raise RuntimeError(
+            f"ADMIN_API_KEY está vacía y APP_ENV={settings.app_env}. "
+            "Definí ADMIN_API_KEY o volvé a APP_ENV=development: sin clave la "
+            "API queda abierta y expone las conexiones a los motores."
+        )
+
+    logger.warning(
+        "ADMIN_API_KEY vacía: la API queda ABIERTA (sin autenticación de "
+        "administración ni de ingesta). Sólo para la demo local."
+    )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
+
+    _check_auth_configuration()
 
     await init_metadata_db(settings.sqlite_path)
     logger.info("metadata inicializada en %s", settings.sqlite_path)

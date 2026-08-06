@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import ValidationError
 
+from app.api.auth import ensure_source_matches, require_admin, require_ingest_source
 from app.api.dependencies import get_storage_router
 from app.config import get_settings
 from app.ids import new_ulid
@@ -11,16 +12,21 @@ from app.models import Estado, LogCreate, LogRecord, LogSummary
 from app.storage.base import LogFilters, StatsFilters
 from app.storage.router import StorageRouter, UnboundSourceError
 
-# Se usa un único router sin prefix para mantener /api/logs y agregar /api/stats
-router = APIRouter(tags=["Logs"])
+# Único router con las dos superficies: POST "" es ingesta (API key de fuente) y
+# el resto —visor y demo— es administración. Por eso la dependencia va por ruta
+# y no colgada del router entero.
+router = APIRouter(prefix="/api/logs", tags=["Logs"])
 
 
 @router.post("/api/logs", status_code=status.HTTP_201_CREATED)
 async def create_log(
     log: LogCreate,
     storage_router: StorageRouter = Depends(get_storage_router),
+    ingest_source: Optional[str] = Depends(require_ingest_source),
 ) -> Dict[str, Any]:
     """Ingesta individual. El ULID lo genera el servidor."""
+
+    ensure_source_matches(ingest_source, log.source_id)
 
     record = log.to_record(new_ulid())
     try:
@@ -130,7 +136,7 @@ async def create_logs_batch(
     }
 
 
-@router.get("/api/logs")
+@router.get("", dependencies=[Depends(require_admin)])
 async def get_logs(
     source: Optional[str] = None,
     estado: Optional[Estado] = None,
@@ -184,8 +190,13 @@ async def get_stats(
         )
     )
 
-# Debe declararse antes de /api/logs/{log_id}.
-@router.post("/api/logs/demo", status_code=status.HTTP_201_CREATED)
+# Esta ruta debe declararse antes de /{log_id}: de lo contrario FastAPI
+# interpretaría "demo" como un id.
+@router.post(
+    "/demo",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin)],
+)
 async def create_demo_logs(
     storage_router: StorageRouter = Depends(get_storage_router),
 ) -> Dict[str, Any]:
@@ -199,7 +210,7 @@ async def create_demo_logs(
     return {"message": "Datos creados", "result": result}
 
 
-@router.get("/api/logs/{log_id}")
+@router.get("/{log_id}", dependencies=[Depends(require_admin)])
 async def get_log(
     log_id: str,
     conn: str = Query(..., min_length=1, description="connection_id del motor de origen"),

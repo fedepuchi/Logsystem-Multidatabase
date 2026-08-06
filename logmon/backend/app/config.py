@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     logmon_batch_max_size: int = Field(default=500, ge=1, le=5000)
     logmon_retention_days: int = Field(default=30, ge=1, le=3650)
     logmon_retention_interval_seconds: int = Field(default=3600, ge=60)
+    # Clave de la superficie de administración (header X-Admin-Key). Vacía
+    # apaga la autenticación entera —modo abierto de la demo— y app.main se
+    # niega a arrancar así si APP_ENV no es development. La ingesta no usa esta
+    # clave: cada fuente tiene sus propias API keys en la metadata.
+    admin_api_key: str = ""
 
     mariadb_host: str = "localhost"
     mariadb_port: int = 3306

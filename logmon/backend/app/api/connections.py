@@ -2,12 +2,19 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
+from app.api.auth import require_admin
 from app.api.dependencies import get_storage_router
 from app.metadata import repo
 from app.models import ConnectionIn
 from app.storage.router import StorageRouter
 
-router = APIRouter(prefix="/api/connections", tags=["Connections"])
+# Las conexiones son administración pura: guardan credenciales de los motores y
+# nunca las toca una aplicación que ingesta.
+router = APIRouter(
+    prefix="/api/connections",
+    tags=["Connections"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 def _public_connection(connection: Dict[str, Any]) -> Dict[str, Any]:

@@ -15,6 +15,7 @@ dependencies = [
     "pydantic-settings>=2.2",
     "python-ulid>=2.2",
     "aiosqlite>=0.19",
+    "cryptography>=42.0",
     "psycopg[binary,pool]>=3.1",
     "asyncmy>=0.2.9",
     "pymssql>=2.2.11",

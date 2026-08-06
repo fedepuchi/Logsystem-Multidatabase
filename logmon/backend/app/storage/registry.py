@@ -94,7 +94,7 @@ class AdapterRegistry:
             if adapter is not None:
                 return adapter
 
-            connection = await repo.get_connection(connection_id)
+            connection = await repo.get_connection_for_adapter(connection_id)
             if connection is None:
                 raise UnknownConnectionError(f"No existe la conexión {connection_id!r}")
 

@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # clave: cada fuente tiene sus propias API keys en la metadata.
     admin_api_key: str = ""
 
+    # Clave Fernet con la que se cifran las contraseñas de las conexiones
+    # antes de guardarlas en la metadata.
+    logmon_secret_key: str = ""
+
     mariadb_host: str = "localhost"
     mariadb_port: int = 3306
     mariadb_user: str = "loguser"

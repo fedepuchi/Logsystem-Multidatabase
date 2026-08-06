@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS connections (
     host        TEXT    NOT NULL,
     port        INTEGER NOT NULL,
     "user"      TEXT    NOT NULL,
-    password    TEXT    NOT NULL,
+    password    TEXT    NOT NULL,  -- cifrada (token Fernet), nunca en claro
     "database"  TEXT    NOT NULL,
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))

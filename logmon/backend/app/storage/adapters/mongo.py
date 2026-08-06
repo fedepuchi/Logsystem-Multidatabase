@@ -5,19 +5,21 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 
 from pymongo import AsyncMongoClient  # type: ignore
+from pymongo.errors import BulkWriteError  # type: ignore
 
 from app.models import Estado, LogRecord, LogStep, ParentType, StepType
-from app.storage.base import LogFilters
+from app.storage.base import (
+    LogFilters,
+    RepositoryStats,
+    StatsFilters,
+    aggregate_stats,
+)
 
 COLLECTION = "logs"
 
 
 class MongoAdapter:
-    """Adapter documental: un log = un documento, con los pasos embebidos.
-
-    Al vivir todo en un único documento la escritura ya es atómica, así que no
-    hace falta transacción (ni un replica set para soportarla).
-    """
+    """Un log es un documento con sus pasos embebidos."""
 
     def __init__(
         self,
@@ -71,18 +73,47 @@ class MongoAdapter:
         return True
 
     async def save(self, record: LogRecord) -> None:
-        await self._collection().insert_one(self._record_to_document(record))
+        error = (await self.save_many([record]))[0]
+        if error is not None:
+            raise RuntimeError(error)
+
+    async def save_many(self, records: List[LogRecord]) -> List[Optional[str]]:
+        if not records:
+            return []
+
+        errors: List[Optional[str]] = [None] * len(records)
+        try:
+            await self._collection().insert_many(
+                [self._record_to_document(record) for record in records],
+                ordered=False,
+            )
+        except BulkWriteError as exc:
+            details = exc.details or {}
+            for write_error in details.get("writeErrors", []):
+                index = int(write_error.get("index", -1))
+                if 0 <= index < len(errors):
+                    errors[index] = (
+                        f"BulkWriteError: {write_error.get('errmsg', 'error de escritura')}"
+                    )
+
+            write_concern_errors = details.get("writeConcernErrors", [])
+            if write_concern_errors:
+                message = f"BulkWriteError: {write_concern_errors}"
+                errors = [error or message for error in errors]
+        except Exception as exc:  # noqa: BLE001 - respuesta parcial
+            message = f"{type(exc).__name__}: {exc}"
+            errors = [message] * len(records)
+
+        return errors
 
     async def query(self, filters: LogFilters) -> List[LogRecord]:
         criteria: Dict[str, Any] = {}
-
         if filters.source_id is not None:
             criteria["source_id"] = filters.source_id
         if filters.estado is not None:
             criteria["estado"] = filters.estado.value
         if filters.metodo is not None:
             criteria["metodo"] = filters.metodo
-
         fecha: Dict[str, Any] = {}
         if filters.fecha_desde is not None:
             fecha["$gte"] = _as_utc(filters.fecha_desde)
@@ -98,12 +129,37 @@ class MongoAdapter:
             .skip(filters.offset)
             .limit(filters.limit)
         )
-
         return [self._document_to_record(document) async for document in cursor]
 
     async def get(self, log_id: str) -> Optional[LogRecord]:
         document = await self._collection().find_one({"_id": log_id})
         return self._document_to_record(document) if document is not None else None
+
+    async def stats(self, filters: StatsFilters) -> RepositoryStats:
+        criteria: Dict[str, Any] = {}
+        if filters.source_id is not None:
+            criteria["source_id"] = filters.source_id
+        fecha: Dict[str, Any] = {}
+        if filters.fecha_desde is not None:
+            fecha["$gte"] = _as_utc(filters.fecha_desde)
+        if filters.fecha_hasta is not None:
+            fecha["$lte"] = _as_utc(filters.fecha_hasta)
+        if fecha:
+            criteria["fecha"] = fecha
+
+        cursor = self._collection().find(
+            criteria,
+            {"fecha": 1, "estado": 1},
+        )
+        rows = [
+            (document["fecha"], document["estado"])
+            async for document in cursor
+        ]
+        return aggregate_stats(rows, filters.bucket_minutes)
+
+    async def delete_before(self, cutoff: datetime) -> int:
+        result = await self._collection().delete_many({"fecha": {"$lt": _as_utc(cutoff)}})
+        return int(result.deleted_count)
 
     @staticmethod
     def _record_to_document(record: LogRecord) -> Dict[str, Any]:
@@ -140,7 +196,6 @@ class MongoAdapter:
             )
             for step in sorted(document.get("steps", []), key=lambda item: item["orden"])
         ]
-
         return LogRecord(
             id=document["_id"],
             source_id=document["source_id"],
@@ -156,4 +211,4 @@ class MongoAdapter:
 
 
 def _as_utc(value: datetime) -> datetime:
-    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)

@@ -8,18 +8,16 @@ import anyio
 import pymssql  # type: ignore
 
 from app.models import Estado, LogRecord, LogStep, ParentType, StepType
-from app.storage.base import LogFilters
+from app.storage.base import (
+    LogFilters,
+    RepositoryStats,
+    StatsFilters,
+    aggregate_stats,
+)
 
 
 class SqlServerAdapter:
-    """Adapter de LogRepository para SQL Server.
-
-    pymssql es una librería sincrónica (bloqueante), así que cada método
-    público async delega el trabajo real a un thread worker vía
-    ``anyio.to_thread.run_sync``. La conexión se crea de forma perezosa y se
-    reutiliza entre llamadas; como pymssql no es thread-safe para uso
-    concurrente sobre la misma conexión, el acceso se serializa con un lock.
-    """
+    """Adapter async sobre pymssql, que es bloqueante."""
 
     def __init__(
         self,
@@ -43,14 +41,6 @@ class SqlServerAdapter:
         self._database_checked = False
 
     def _ensure_database_sync(self) -> None:
-        """Crea la base si no existe, conectando a ``master``.
-
-        El contenedor de SQL Server arranca sólo con las bases del sistema: sin
-        este paso, conectar directo a ``logdb`` falla y el adapter nunca llega
-        a crear el schema. Se ejecuta una única vez por adapter, antes de abrir
-        la conexión de trabajo, para que ``ping()`` también funcione.
-        """
-
         conn = pymssql.connect(
             server=self._host,
             port=str(self._port),
@@ -59,12 +49,10 @@ class SqlServerAdapter:
             database="master",
             login_timeout=self._login_timeout,
             timeout=self._timeout,
-            autocommit=True,  # CREATE DATABASE no puede correr en transacción
+            autocommit=True,
         )
         try:
-            # El nombre de la base viene del formulario de conexión, así que se
-            # escapa como identificador entre corchetes y como literal N'...'.
-            bracketed = self._database.replace("]", "]]")
+            bracketed = self._database.replace("]", "]]" )
             quoted = self._database.replace("'", "''")
             with conn.cursor() as cur:
                 cur.execute(
@@ -78,7 +66,6 @@ class SqlServerAdapter:
             if not self._database_checked:
                 self._ensure_database_sync()
                 self._database_checked = True
-
             self._conn = pymssql.connect(
                 server=self._host,
                 port=str(self._port),
@@ -100,7 +87,6 @@ class SqlServerAdapter:
     async def close(self) -> None:
         await anyio.to_thread.run_sync(self._close_sync)
 
-    
     def _ensure_schema_sync(self) -> None:
         with self._lock:
             conn = self._get_conn_sync()
@@ -177,7 +163,6 @@ class SqlServerAdapter:
     async def ensure_schema(self) -> None:
         await anyio.to_thread.run_sync(self._ensure_schema_sync)
 
-    
     def _ping_sync(self) -> bool:
         with self._lock:
             conn = self._get_conn_sync()
@@ -189,57 +174,76 @@ class SqlServerAdapter:
     async def ping(self) -> bool:
         return await anyio.to_thread.run_sync(self._ping_sync)
 
-    
-    def _save_sync(self, record: LogRecord) -> None:
+    async def save(self, record: LogRecord) -> None:
+        error = (await self.save_many([record]))[0]
+        if error is not None:
+            raise RuntimeError(error)
+
+    def _save_many_sync(self, records: List[LogRecord]) -> List[Optional[str]]:
+        if not records:
+            return []
+
         with self._lock:
             conn = self._get_conn_sync()
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO dbo.logs (
-                        id, source_id, parent_type, entrada, resultado,
-                        metodo, tiempo_ms, estado, fecha
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        record.id,
-                        record.source_id,
-                        record.parent_type.value,
-                        record.entrada,
-                        record.resultado,
-                        record.metodo,
-                        record.tiempo_ms,
-                        record.estado.value,
-                        record.fecha,
-                    ),
-                )
-                if record.steps:
+            try:
+                with conn.cursor() as cur:
                     cur.executemany(
                         """
-                        INSERT INTO dbo.log_steps (log_id, orden, tipo, contenido, duration_ms)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO dbo.logs (
+                            id, source_id, parent_type, entrada, resultado,
+                            metodo, tiempo_ms, estado, fecha
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         [
                             (
                                 record.id,
-                                step.orden,
-                                step.tipo.value,
-                                step.contenido,
-                                step.duration_ms,
+                                record.source_id,
+                                record.parent_type.value,
+                                record.entrada,
+                                record.resultado,
+                                record.metodo,
+                                record.tiempo_ms,
+                                record.estado.value,
+                                record.fecha,
                             )
-                            for step in record.steps
+                            for record in records
                         ],
                     )
-            conn.commit()
 
-    async def save(self, record: LogRecord) -> None:
-        await anyio.to_thread.run_sync(self._save_sync, record)
+                    steps = [
+                        (
+                            record.id,
+                            step.orden,
+                            step.tipo.value,
+                            step.contenido,
+                            step.duration_ms,
+                        )
+                        for record in records
+                        for step in record.steps
+                    ]
+                    if steps:
+                        cur.executemany(
+                            """
+                            INSERT INTO dbo.log_steps
+                                (log_id, orden, tipo, contenido, duration_ms)
+                            VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            steps,
+                        )
+                conn.commit()
+            except Exception as exc:  # noqa: BLE001 - respuesta parcial
+                conn.rollback()
+                error = f"{type(exc).__name__}: {exc}"
+                return [error] * len(records)
 
-   
+        return [None] * len(records)
+
+    async def save_many(self, records: List[LogRecord]) -> List[Optional[str]]:
+        return await anyio.to_thread.run_sync(self._save_many_sync, records)
+
     def _query_sync(self, filters: LogFilters) -> List[LogRecord]:
         clauses: List[str] = []
         params: List[Any] = []
-
         if filters.source_id is not None:
             clauses.append("source_id = %s")
             params.append(filters.source_id)
@@ -255,7 +259,6 @@ class SqlServerAdapter:
         if filters.fecha_hasta is not None:
             clauses.append("fecha <= %s")
             params.append(filters.fecha_hasta)
-
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
         with self._lock:
@@ -273,7 +276,6 @@ class SqlServerAdapter:
                     (*params, filters.offset, filters.limit),
                 )
                 log_rows = cur.fetchall()
-
                 if not log_rows:
                     return []
 
@@ -300,13 +302,11 @@ class SqlServerAdapter:
                     duration_ms=row["duration_ms"],
                 )
             )
-
         return [self._row_to_record(row, steps_by_log.get(row["id"], [])) for row in log_rows]
 
     async def query(self, filters: LogFilters) -> List[LogRecord]:
         return await anyio.to_thread.run_sync(self._query_sync, filters)
 
-   
     def _get_sync(self, log_id: str) -> Optional[LogRecord]:
         with self._lock:
             conn = self._get_conn_sync()
@@ -323,7 +323,6 @@ class SqlServerAdapter:
                 log_row = cur.fetchone()
                 if log_row is None:
                     return None
-
                 cur.execute(
                     """
                     SELECT log_id, orden, tipo, contenido, duration_ms
@@ -349,7 +348,53 @@ class SqlServerAdapter:
     async def get(self, log_id: str) -> Optional[LogRecord]:
         return await anyio.to_thread.run_sync(self._get_sync, log_id)
 
-    
+    def _stats_sync(self, filters: StatsFilters) -> RepositoryStats:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if filters.source_id is not None:
+            clauses.append("source_id = %s")
+            params.append(filters.source_id)
+        if filters.fecha_desde is not None:
+            clauses.append("fecha >= %s")
+            params.append(filters.fecha_desde)
+        if filters.fecha_hasta is not None:
+            clauses.append("fecha <= %s")
+            params.append(filters.fecha_hasta)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        with self._lock:
+            conn = self._get_conn_sync()
+            with conn.cursor(as_dict=True) as cur:
+                cur.execute(
+                    f"SELECT fecha, estado FROM dbo.logs {where_sql}",
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+
+        return aggregate_stats(
+            ((row["fecha"], row["estado"]) for row in rows),
+            filters.bucket_minutes,
+        )
+
+    async def stats(self, filters: StatsFilters) -> RepositoryStats:
+        return await anyio.to_thread.run_sync(self._stats_sync, filters)
+
+    def _delete_before_sync(self, cutoff: datetime) -> int:
+        with self._lock:
+            conn = self._get_conn_sync()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM dbo.logs WHERE fecha < %s", (cutoff,))
+                    deleted = max(cur.rowcount or 0, 0)
+                conn.commit()
+                return deleted
+            except Exception:
+                conn.rollback()
+                raise
+
+    async def delete_before(self, cutoff: datetime) -> int:
+        return await anyio.to_thread.run_sync(self._delete_before_sync, cutoff)
+
     @staticmethod
     def _row_to_record(row: Dict[str, Any], steps: List[LogStep]) -> LogRecord:
         fecha = row["fecha"]

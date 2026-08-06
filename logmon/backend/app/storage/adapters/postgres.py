@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 
@@ -8,8 +8,12 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from app.models import Estado, LogRecord, LogStep, ParentType, StepType
-from app.storage.base import LogFilters
-
+from app.storage.base import (
+    LogFilters,
+    RepositoryStats,
+    StatsFilters,
+    aggregate_stats,
+)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS logs (
@@ -24,7 +28,6 @@ CREATE TABLE IF NOT EXISTS logs (
     fecha       TIMESTAMPTZ  NOT NULL,
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
-
 CREATE TABLE IF NOT EXISTS log_steps (
     log_id      CHAR(26) NOT NULL REFERENCES logs(id) ON DELETE CASCADE,
     orden       INT      NOT NULL,
@@ -33,15 +36,13 @@ CREATE TABLE IF NOT EXISTS log_steps (
     duration_ms INT      NULL,
     PRIMARY KEY (log_id, orden)
 );
-
 CREATE INDEX IF NOT EXISTS idx_logs_source_fecha ON logs (source_id, fecha);
-CREATE INDEX IF NOT EXISTS idx_logs_estado        ON logs (estado);
-CREATE INDEX IF NOT EXISTS idx_logs_metodo         ON logs (metodo);
+CREATE INDEX IF NOT EXISTS idx_logs_estado ON logs (estado);
+CREATE INDEX IF NOT EXISTS idx_logs_metodo ON logs (metodo);
 """
 
 
 class PostgresAdapter:
-
     def __init__(
         self,
         host: str,
@@ -80,9 +81,6 @@ class PostgresAdapter:
                 kwargs={"row_factory": dict_row},
             )
             try:
-                # Sin timeout explícito psycopg espera 30s reintentando. El
-                # switch valida el destino con el lock de la fuente tomado, así
-                # que una base caída bloquearía las escrituras todo ese rato.
                 await pool.open(wait=True, timeout=self._connect_timeout)
             except Exception:
                 await pool.close()
@@ -111,52 +109,72 @@ class PostgresAdapter:
         return True
 
     async def save(self, record: LogRecord) -> None:
+        error = (await self.save_many([record]))[0]
+        if error is not None:
+            raise RuntimeError(error)
+
+    async def save_many(self, records: List[LogRecord]) -> List[Optional[str]]:
+        if not records:
+            return []
+
         pool = await self._get_pool()
-        async with pool.connection() as conn:
-            async with conn.transaction():  
-                async with conn.cursor() as cur:
-                    await cur.execute(
-                        """
-                        INSERT INTO logs (
-                            id, source_id, parent_type, entrada, resultado,
-                            metodo, tiempo_ms, estado, fecha
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            record.id,
-                            record.source_id,
-                            record.parent_type.value,
-                            record.entrada,
-                            record.resultado,
-                            record.metodo,
-                            record.tiempo_ms,
-                            record.estado.value,
-                            record.fecha,
-                        ),
-                    )
-                    if record.steps:
+        try:
+            async with pool.connection() as conn:
+                async with conn.transaction():
+                    async with conn.cursor() as cur:
                         await cur.executemany(
                             """
-                            INSERT INTO log_steps (log_id, orden, tipo, contenido, duration_ms)
-                            VALUES (%s, %s, %s, %s, %s)
+                            INSERT INTO logs (
+                                id, source_id, parent_type, entrada, resultado,
+                                metodo, tiempo_ms, estado, fecha
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """,
                             [
                                 (
                                     record.id,
-                                    step.orden,
-                                    step.tipo.value,
-                                    step.contenido,
-                                    step.duration_ms,
+                                    record.source_id,
+                                    record.parent_type.value,
+                                    record.entrada,
+                                    record.resultado,
+                                    record.metodo,
+                                    record.tiempo_ms,
+                                    record.estado.value,
+                                    record.fecha,
                                 )
-                                for step in record.steps
+                                for record in records
                             ],
                         )
+
+                        steps = [
+                            (
+                                record.id,
+                                step.orden,
+                                step.tipo.value,
+                                step.contenido,
+                                step.duration_ms,
+                            )
+                            for record in records
+                            for step in record.steps
+                        ]
+                        if steps:
+                            await cur.executemany(
+                                """
+                                INSERT INTO log_steps
+                                    (log_id, orden, tipo, contenido, duration_ms)
+                                VALUES (%s, %s, %s, %s, %s)
+                                """,
+                                steps,
+                            )
+        except Exception as exc:  
+            error = f"{type(exc).__name__}: {exc}"
+            return [error] * len(records)
+
+        return [None] * len(records)
 
     async def query(self, filters: LogFilters) -> List[LogRecord]:
         pool = await self._get_pool()
         clauses: List[str] = []
         params: List[Any] = []
-
         if filters.source_id is not None:
             clauses.append("source_id = %s")
             params.append(filters.source_id)
@@ -172,8 +190,6 @@ class PostgresAdapter:
         if filters.fecha_hasta is not None:
             clauses.append("fecha <= %s")
             params.append(filters.fecha_hasta)
-
-    
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
         async with pool.connection() as conn:
@@ -190,7 +206,6 @@ class PostgresAdapter:
                     (*params, filters.limit, filters.offset),
                 )
                 log_rows = await cur.fetchall()
-
                 if not log_rows:
                     return []
 
@@ -216,7 +231,6 @@ class PostgresAdapter:
                     duration_ms=row["duration_ms"],
                 )
             )
-
         return [self._row_to_record(row, steps_by_log.get(row["id"], [])) for row in log_rows]
 
     async def get(self, log_id: str) -> Optional[LogRecord]:
@@ -235,7 +249,6 @@ class PostgresAdapter:
                 log_row = await cur.fetchone()
                 if log_row is None:
                     return None
-
                 await cur.execute(
                     """
                     SELECT log_id, orden, tipo, contenido, duration_ms
@@ -258,6 +271,43 @@ class PostgresAdapter:
         ]
         return self._row_to_record(log_row, steps)
 
+    async def stats(self, filters: StatsFilters) -> RepositoryStats:
+        pool = await self._get_pool()
+        clauses: List[str] = []
+        params: List[Any] = []
+        if filters.source_id is not None:
+            clauses.append("source_id = %s")
+            params.append(filters.source_id)
+        if filters.fecha_desde is not None:
+            clauses.append("fecha >= %s")
+            params.append(filters.fecha_desde)
+        if filters.fecha_hasta is not None:
+            clauses.append("fecha <= %s")
+            params.append(filters.fecha_hasta)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"SELECT fecha, estado FROM logs {where_sql}",
+                    tuple(params),
+                )
+                rows = await cur.fetchall()
+
+        return aggregate_stats(
+            ((row["fecha"], row["estado"]) for row in rows),
+            filters.bucket_minutes,
+        )
+
+    async def delete_before(self, cutoff: datetime) -> int:
+        pool = await self._get_pool()
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM logs WHERE fecha < %s", (cutoff,))
+                deleted = max(cur.rowcount or 0, 0)
+            await conn.commit()
+        return deleted
+
     @staticmethod
     def _row_to_record(row: Dict[str, Any], steps: List[LogStep]) -> LogRecord:
         fecha = row["fecha"]
@@ -275,5 +325,3 @@ class PostgresAdapter:
             fecha=fecha,
             steps=steps,
         )
-
-        

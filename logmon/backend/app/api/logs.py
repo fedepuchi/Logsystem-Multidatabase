@@ -18,7 +18,7 @@ from app.storage.router import StorageRouter, UnboundSourceError
 router = APIRouter(prefix="/api/logs", tags=["Logs"])
 
 
-@router.post("/api/logs", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 async def create_log(
     log: LogCreate,
     storage_router: StorageRouter = Depends(get_storage_router),
@@ -46,7 +46,7 @@ async def create_log(
     }
 
 
-@router.post("/api/logs/batch", status_code=status.HTTP_200_OK)
+@router.post("/batch", status_code=status.HTTP_200_OK)
 async def create_logs_batch(
     payloads: List[Any] = Body(...),
     storage_router: StorageRouter = Depends(get_storage_router),
@@ -165,7 +165,7 @@ async def get_logs(
     return await storage_router.query(filters)
 
 
-@router.get("/api/stats")
+@router.get("/stats")
 async def get_stats(
     source: Optional[str] = None,
     fecha_inicio: Optional[datetime] = None,

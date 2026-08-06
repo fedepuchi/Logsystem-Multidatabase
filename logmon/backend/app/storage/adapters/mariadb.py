@@ -197,7 +197,11 @@ class MariaDbAdapter:
                            metodo, tiempo_ms, estado, fecha
                     FROM logs
                     {where_sql}
-                    ORDER BY fecha DESC
+                    -- El id desempata: sin él, dos logs con la misma fecha
+                    -- salen en orden indefinido y la paginación puede repetir
+                    -- o saltear filas. El router mergea por (fecha, id), así
+                    -- que el adapter tiene que entregar ese mismo orden.
+                    ORDER BY fecha DESC, id DESC
                     LIMIT %s OFFSET %s
                     """,
                     (*params, filters.limit, filters.offset),

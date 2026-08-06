@@ -141,6 +141,38 @@ async def test_query_offset_pagination(adapter: Any) -> None:
 
 
 @pytest.mark.anyio
+async def test_paginar_con_fechas_iguales_no_repite_ni_pierde(adapter: Any) -> None:
+    """Seis logs en el mismo instante, recorridos de a dos.
+
+    Es el caso que rompía: los adapters SQL ordenaban sólo por `fecha DESC`, sin
+    desempate, así que con fechas iguales el motor podía devolver las filas en
+    distinto orden en cada consulta y una misma fila aparecía dos veces o no
+    aparecía nunca. El router mergea por (fecha, id), de modo que cada adapter
+    tiene que entregar ese mismo orden total.
+    """
+
+    source_id = unique_source()
+    instante = datetime.now(timezone.utc)
+
+    guardados = set()
+    for _ in range(6):
+        record = make_record(source_id, fecha=instante)
+        await adapter.save(record)
+        guardados.add(record.id)
+
+    vistos = []
+    for offset in (0, 2, 4):
+        pagina = await adapter.query(
+            LogFilters(source_id=source_id, limit=2, offset=offset)
+        )
+        vistos.extend(r.id for r in pagina)
+
+    assert len(vistos) == 6, "alguna página devolvió menos filas de las esperadas"
+    assert len(set(vistos)) == 6, "una fila apareció en más de una página"
+    assert set(vistos) == guardados, "se perdió alguna fila al paginar"
+
+
+@pytest.mark.anyio
 async def test_ensure_schema_is_idempotent(adapter: Any) -> None:
     # El switch llama a ensure_schema en cada validación, así que repetirlo
     # tiene que ser inofensivo.

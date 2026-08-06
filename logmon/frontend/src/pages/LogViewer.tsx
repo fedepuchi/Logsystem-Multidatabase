@@ -22,6 +22,8 @@ const EMPTY_FILTERS: LogQuery = {
   fecha_fin: "",
 };
 
+const PAGE_SIZE = 50;
+
 function toIsoOrUndefined(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -40,6 +42,12 @@ export default function LogViewer() {
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
 
+  // offset de la página actual; el tamaño de página es fijo (PAGE_SIZE).
+  const [offset, setOffset] = useState(0);
+  // El backend no devuelve un total, así que "hay página siguiente" se infiere
+  // de si la última carga trajo una página llena (logs.length === PAGE_SIZE).
+  const [hasNextPage, setHasNextPage] = useState(false);
+
   useEffect(() => {
     Promise.all([connectionsApi.list(), sourcesApi.list()])
       .then(([conns, srcs]) => {
@@ -49,6 +57,7 @@ export default function LogViewer() {
       .catch(() => {
         setConnections([]);
         setSources([]);
+        setError("No se pudieron cargar las conexiones o fuentes");
       });
   }, []);
 
@@ -63,19 +72,23 @@ export default function LogViewer() {
         metodo: filters.metodo || undefined,
         fecha_inicio: toIsoOrUndefined(filters.fecha_inicio),
         fecha_fin: toIsoOrUndefined(filters.fecha_fin),
+        limit: PAGE_SIZE,
+        offset,
       };
 
       const result = await logsApi.list(query);
       setLogs(result);
+      setHasNextPage(result.length === PAGE_SIZE);
       setSelected(null);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "No se pudieron cargar los logs";
       setError(message);
       setLogs([]);
+      setHasNextPage(false);
     } finally {
       setLoading(false);
     }
-  }, [filters]);
+  }, [filters, offset]);
 
   useEffect(() => {
     void loadLogs();
@@ -97,6 +110,9 @@ export default function LogViewer() {
     setError(null);
     try {
       await logsApi.demo();
+      // reset offset: demo data replaces the dataset, current page may no
+      // longer exist and would silently render empty otherwise.
+      setOffset(0);
       await loadLogs();
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "No se pudieron generar los datos";
@@ -106,7 +122,28 @@ export default function LogViewer() {
 
   function update<K extends keyof LogQuery>(key: K, value: LogQuery[K]) {
     setFilters((prev) => ({ ...prev, [key]: value }));
+    // Cambiar cualquier filtro vuelve a la primera página: si no reseteamos
+    // el offset, se puede quedar filtrando "página 3" sobre un resultado
+    // nuevo mucho más chico y mostrar una página vacía sin explicación.
+    setOffset(0);
   }
+
+  function handleClearFilters() {
+    setFilters(EMPTY_FILTERS);
+    setOffset(0);
+  }
+
+  function handlePrevPage() {
+    setOffset((prev) => Math.max(0, prev - PAGE_SIZE));
+  }
+
+  function handleNextPage() {
+    if (hasNextPage) {
+      setOffset((prev) => prev + PAGE_SIZE);
+    }
+  }
+
+  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
 
   return (
     <div className="log-viewer">
@@ -188,7 +225,7 @@ export default function LogViewer() {
           />
         </label>
 
-        <button type="button" onClick={() => setFilters(EMPTY_FILTERS)}>
+        <button type="button" onClick={handleClearFilters}>
           Limpiar
         </button>
       </section>
@@ -204,6 +241,24 @@ export default function LogViewer() {
             onSelect={setSelected}
             loading={loading}
           />
+
+          <div className="pagination">
+            <button
+              type="button"
+              onClick={handlePrevPage}
+              disabled={loading || offset === 0}
+            >
+              ← Anterior
+            </button>
+            <span className="pagination__page">Página {currentPage}</span>
+            <button
+              type="button"
+              onClick={handleNextPage}
+              disabled={loading || !hasNextPage}
+            >
+              Siguiente →
+            </button>
+          </div>
         </div>
 
         <LogDetail summary={selected} connections={connections} />

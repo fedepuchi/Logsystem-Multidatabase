@@ -27,6 +27,18 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+# Las contraseñas de las conexiones se guardan cifradas, así que los tests
+# necesitan su propia clave.
+@pytest.fixture(autouse=True)
+def clave_de_cifrado(monkeypatch) -> None:
+    from app.config import get_settings
+    from app.crypto import validate_secret_key
+
+    monkeypatch.setenv("LOGMON_SECRET_KEY", "A9zNkc28EKOZryEO6lBC5SwKLBIBoJ4azXAkQX1CBE4=")
+    get_settings.cache_clear()
+    validate_secret_key()
+
+
 # --------------------------------------------------------------------------
 # Adapters reales (necesitan los motores levantados)
 # --------------------------------------------------------------------------

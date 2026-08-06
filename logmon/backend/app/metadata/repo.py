@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from app.crypto import decrypt_password, encrypt_password
 from app.ids import new_ulid
 from app.metadata.db import get_metadata_db
 from app.models import ConnectionIn, SourceIn
@@ -28,7 +29,7 @@ async def list_connections() -> List[Dict[str, Any]]:
     db = get_metadata_db()
     async with db.execute(
         """
-        SELECT id, name, engine, host, port, "user", password, "database"
+        SELECT id, name, engine, host, port, "user", "database"
         FROM connections
         ORDER BY id
         """
@@ -40,7 +41,7 @@ async def get_connection(connection_id: str) -> Optional[Dict[str, Any]]:
     db = get_metadata_db()
     async with db.execute(
         """
-        SELECT id, name, engine, host, port, "user", password, "database"
+        SELECT id, name, engine, host, port, "user", "database"
         FROM connections
         WHERE id = ?
         """,
@@ -48,6 +49,32 @@ async def get_connection(connection_id: str) -> Optional[Dict[str, Any]]:
     ) as cur:
         row = await cur.fetchone()
     return _row_to_dict(row) if row is not None else None
+
+
+async def get_connection_for_adapter(connection_id: str) -> Optional[Dict[str, Any]]:
+    """Igual que get_connection, pero con la contraseña descifrada.
+
+    Es la única puerta por la que la contraseña sale de la metadata: la usa el
+    registry para abrir el pool del motor.
+    """
+
+    db = get_metadata_db()
+    async with db.execute(
+        """
+        SELECT id, name, engine, host, port, "user", password, "database"
+        FROM connections
+        WHERE id = ?
+        """,
+        (connection_id,),
+    ) as cur:
+        row = await cur.fetchone()
+
+    if row is None:
+        return None
+
+    connection = _row_to_dict(row)
+    connection["password"] = decrypt_password(connection["password"])
+    return connection
 
 
 async def connection_name_exists(name: str, exclude_id: Optional[str] = None) -> bool:
@@ -105,7 +132,7 @@ async def create_connection(
             data.host.strip(),
             data.port,
             data.user.strip(),
-            data.password,
+            encrypt_password(data.password),
             data.database.strip(),
         ),
     )
@@ -132,7 +159,7 @@ async def update_connection(connection_id: str, data: ConnectionIn) -> Dict[str,
             data.host.strip(),
             data.port,
             data.user.strip(),
-            data.password,
+            encrypt_password(data.password),
             data.database.strip(),
             connection_id,
         ),

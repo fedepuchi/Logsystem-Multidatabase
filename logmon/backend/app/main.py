@@ -15,6 +15,7 @@ from app.api import logs as logs_api
 from app.api import sources as sources_api
 from app.api.auth import ADMIN_HEADER, INGEST_HEADER, auth_enabled
 from app.config import get_settings
+from app.crypto import validate_secret_key
 from app.metadata.db import close_metadata_db, init_metadata_db
 from app.storage.router import storage_router
 
@@ -82,6 +83,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
 
     _check_auth_configuration()
+    validate_secret_key()
 
     await init_metadata_db(settings.sqlite_path)
     logger.info("metadata inicializada en %s", settings.sqlite_path)

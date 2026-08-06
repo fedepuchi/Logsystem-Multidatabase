@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,6 +23,11 @@ from app.storage.router import storage_router
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Cuánto se espera a que la retención termine sola en el shutdown antes de
+# cancelarla. Es constante de módulo para que los tests puedan bajarlo sin
+# tener que parchear asyncio.
+RETENTION_SHUTDOWN_TIMEOUT = 5.0
 
 
 def _resolve_static_dir() -> Optional[Path]:
@@ -91,7 +97,36 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     await storage_router.rebuild()
     logger.info("router reconstruido desde la metadata")
 
+    # La retención estaba implementada y probada, pero nadie la arrancaba: sin
+    # esto `cleanup_expired` no corría nunca y los logs se acumulaban sin
+    # límite, incluida la memoria de Redis.
+    retention_stop = asyncio.Event()
+    retention_task = asyncio.create_task(
+        storage_router.retention_loop(
+            retention_days=settings.logmon_retention_days,
+            interval_seconds=settings.logmon_retention_interval_seconds,
+            stop_event=retention_stop,
+        ),
+        name="logmon-retention",
+    )
+    logger.info(
+        "retención activa: borra logs de más de %d días, cada %d segundos",
+        settings.logmon_retention_days,
+        settings.logmon_retention_interval_seconds,
+    )
+
     yield
+
+    # Primero se frena la retención y sólo después se cierran los adapters: al
+    # revés, la tarea podría estar a mitad de un borrado contra un pool ya
+    # cerrado.
+    retention_stop.set()
+    try:
+        await asyncio.wait_for(retention_task, timeout=RETENTION_SHUTDOWN_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("la retención no terminó a tiempo; se cancela")
+        retention_task.cancel()
+        await asyncio.gather(retention_task, return_exceptions=True)
 
     await storage_router.close_all()
     await close_metadata_db()

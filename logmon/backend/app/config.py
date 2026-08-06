@@ -3,17 +3,12 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Dict, List
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Configuración central del backend.
-
-    Todos los valores se leen de variables de entorno (o de un ``.env``), con
-    defaults pensados para desarrollo local contra los contenedores del
-    docker-compose. Los nombres coinciden con los de ``.env.example``: el campo
-    ``mariadb_host`` se alimenta de ``MARIADB_HOST``, y así con el resto.
-    """
+    """Configuración central del backend leída desde variables de entorno."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -25,16 +20,20 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "info"
 
-    # Metadata (fuente de verdad de conexiones, fuentes y bindings).
+    # Metadata.
     sqlite_path: str = "./data/logmon.db"
 
-    # Build del frontend. Si está vacío se buscan rutas conocidas del repo y
-    # de la imagen Docker (ver app.main._resolve_static_dir).
+    # Frontend y CORS.
     static_dir: str = ""
-
-    # Lista separada por comas; se expone ya parseada en cors_origin_list.
     cors_origins: str = "http://localhost:5173,http://localhost:8000"
 
+    # Jorge — API: lotes y retención.
+    # Variables de entorno:
+    # LOGMON_BATCH_MAX_SIZE, LOGMON_RETENTION_DAYS y
+    # LOGMON_RETENTION_INTERVAL_SECONDS.
+    logmon_batch_max_size: int = Field(default=500, ge=1, le=5000)
+    logmon_retention_days: int = Field(default=30, ge=1, le=3650)
+    logmon_retention_interval_seconds: int = Field(default=3600, ge=60)
     # Clave de la superficie de administración (header X-Admin-Key). Vacía
     # apaga la autenticación entera —modo abierto de la demo— y app.main se
     # niega a arrancar así si APP_ENV no es development. La ingesta no usa esta
@@ -76,12 +75,6 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     def demo_connections(self) -> List[Dict[str, object]]:
-        """Conexiones C1..C5 de la demo, derivadas de la configuración activa.
-
-        Se usan desde ``app.seed`` para que el seed y el docker-compose nunca
-        puedan divergir en credenciales: hay una sola fuente, el entorno.
-        """
-
         return [
             {
                 "id": "C1",

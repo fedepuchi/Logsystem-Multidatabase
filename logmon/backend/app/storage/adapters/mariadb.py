@@ -3,11 +3,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import asyncmy # type: ignore
-from asyncmy.cursors import DictCursor # type: ignore
+import asyncmy  # type: ignore
+from asyncmy.cursors import DictCursor  # type: ignore
 
 from app.models import Estado, LogRecord, LogStep, ParentType, StepType
-from app.storage.base import LogFilters
+from app.storage.base import (
+    LogFilters,
+    RepositoryStats,
+    StatsFilters,
+    aggregate_stats,
+)
 
 
 class MariaDbAdapter:
@@ -100,52 +105,73 @@ class MariaDbAdapter:
         return True
 
     async def save(self, record: LogRecord) -> None:
+        error = (await self.save_many([record]))[0]
+        if error is not None:
+            raise RuntimeError(error)
+
+    async def save_many(self, records: List[LogRecord]) -> List[Optional[str]]:
+        if not records:
+            return []
+
         pool = await self._get_pool()
         async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(
-                    """
-                    INSERT INTO logs (
-                        id, source_id, parent_type, entrada, resultado,
-                        metodo, tiempo_ms, estado, fecha
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        record.id,
-                        record.source_id,
-                        record.parent_type.value,
-                        record.entrada,
-                        record.resultado,
-                        record.metodo,
-                        record.tiempo_ms,
-                        record.estado.value,
-                        record.fecha,
-                    ),
-                )
-                if record.steps:
+            try:
+                async with conn.cursor() as cur:
                     await cur.executemany(
                         """
-                        INSERT INTO log_steps (log_id, orden, tipo, contenido, duration_ms)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO logs (
+                            id, source_id, parent_type, entrada, resultado,
+                            metodo, tiempo_ms, estado, fecha
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         [
                             (
                                 record.id,
-                                step.orden,
-                                step.tipo.value,
-                                step.contenido,
-                                step.duration_ms,
+                                record.source_id,
+                                record.parent_type.value,
+                                record.entrada,
+                                record.resultado,
+                                record.metodo,
+                                record.tiempo_ms,
+                                record.estado.value,
+                                record.fecha,
                             )
-                            for step in record.steps
+                            for record in records
                         ],
                     )
-            await conn.commit()
+
+                    steps = [
+                        (
+                            record.id,
+                            step.orden,
+                            step.tipo.value,
+                            step.contenido,
+                            step.duration_ms,
+                        )
+                        for record in records
+                        for step in record.steps
+                    ]
+                    if steps:
+                        await cur.executemany(
+                            """
+                            INSERT INTO log_steps
+                                (log_id, orden, tipo, contenido, duration_ms)
+                            VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            steps,
+                        )
+                await conn.commit()
+            except Exception as exc:  # noqa: BLE001 - contrato de respuesta parcial
+                await conn.rollback()
+                error = f"{type(exc).__name__}: {exc}"
+                return [error] * len(records)
+
+        return [None] * len(records)
 
     async def query(self, filters: LogFilters) -> List[LogRecord]:
         pool = await self._get_pool()
         clauses: List[str] = []
         params: List[Any] = []
-
         if filters.source_id is not None:
             clauses.append("source_id = %s")
             params.append(filters.source_id)
@@ -161,7 +187,6 @@ class MariaDbAdapter:
         if filters.fecha_hasta is not None:
             clauses.append("fecha <= %s")
             params.append(filters.fecha_hasta)
-
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
         async with pool.acquire() as conn:
@@ -178,7 +203,6 @@ class MariaDbAdapter:
                     (*params, filters.limit, filters.offset),
                 )
                 log_rows = await cur.fetchall()
-
                 if not log_rows:
                     return []
 
@@ -205,7 +229,6 @@ class MariaDbAdapter:
                     duration_ms=row["duration_ms"],
                 )
             )
-
         return [self._row_to_record(row, steps_by_log.get(row["id"], [])) for row in log_rows]
 
     async def get(self, log_id: str) -> Optional[LogRecord]:
@@ -224,7 +247,6 @@ class MariaDbAdapter:
                 log_row = await cur.fetchone()
                 if log_row is None:
                     return None
-
                 await cur.execute(
                     """
                     SELECT log_id, orden, tipo, contenido, duration_ms
@@ -246,6 +268,47 @@ class MariaDbAdapter:
             for row in step_rows
         ]
         return self._row_to_record(log_row, steps)
+
+    async def stats(self, filters: StatsFilters) -> RepositoryStats:
+        pool = await self._get_pool()
+        clauses: List[str] = []
+        params: List[Any] = []
+        if filters.source_id is not None:
+            clauses.append("source_id = %s")
+            params.append(filters.source_id)
+        if filters.fecha_desde is not None:
+            clauses.append("fecha >= %s")
+            params.append(filters.fecha_desde)
+        if filters.fecha_hasta is not None:
+            clauses.append("fecha <= %s")
+            params.append(filters.fecha_hasta)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        async with pool.acquire() as conn:
+            async with conn.cursor(cursor=DictCursor) as cur:
+                await cur.execute(
+                    f"SELECT fecha, estado FROM logs {where_sql}",
+                    tuple(params),
+                )
+                rows = await cur.fetchall()
+
+        return aggregate_stats(
+            ((row["fecha"], row["estado"]) for row in rows),
+            filters.bucket_minutes,
+        )
+
+    async def delete_before(self, cutoff: datetime) -> int:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute("DELETE FROM logs WHERE fecha < %s", (cutoff,))
+                    deleted = max(cur.rowcount or 0, 0)
+                await conn.commit()
+                return deleted
+            except Exception:
+                await conn.rollback()
+                raise
 
     @staticmethod
     def _row_to_record(row: Dict[str, Any], steps: List[LogStep]) -> LogRecord:

@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 _connection: Optional[aiosqlite.Connection] = None
+_connection_path: Optional[str] = None
 
 
 async def init_metadata_db(sqlite_path: str) -> aiosqlite.Connection:
@@ -21,10 +22,16 @@ async def init_metadata_db(sqlite_path: str) -> aiosqlite.Connection:
     del backend.
     """
 
-    global _connection
+    global _connection, _connection_path
 
     if _connection is not None:
-        return _connection
+        if _connection_path == sqlite_path:
+            return _connection
+        # Path distinto al de la conexión abierta (p.ej. tests que no
+        # cerraron la suya): cerrarla en vez de seguir usando la vieja.
+        await _connection.close()
+        _connection = None
+        _connection_path = None
 
     path = Path(sqlite_path).expanduser()
     if path.parent and not path.parent.exists():
@@ -42,6 +49,7 @@ async def init_metadata_db(sqlite_path: str) -> aiosqlite.Connection:
     await conn.commit()
 
     _connection = conn
+    _connection_path = sqlite_path
     logger.info("metadata SQLite lista en %s", path)
     return conn
 
@@ -55,8 +63,9 @@ def get_metadata_db() -> aiosqlite.Connection:
 
 
 async def close_metadata_db() -> None:
-    global _connection
+    global _connection, _connection_path
 
     if _connection is not None:
         await _connection.close()
         _connection = None
+        _connection_path = None

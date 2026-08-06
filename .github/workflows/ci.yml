@@ -3,7 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
- 
+  pull_request:
+    branches: [main]
+    
 jobs:
   # ---------------------------------------------------------------------
   # Job 1: tests — corre los 100 tests contra los cinco motores reales

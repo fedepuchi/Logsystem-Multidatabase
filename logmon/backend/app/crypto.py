@@ -6,10 +6,8 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import get_settings
 
-
 class SecretKeyError(RuntimeError):
     """LOGMON_SECRET_KEY falta o no es una clave Fernet válida."""
-
 
 @lru_cache(maxsize=1)
 def _fernet() -> Fernet:

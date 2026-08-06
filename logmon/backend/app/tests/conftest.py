@@ -203,6 +203,21 @@ class FakeAdapter:
             await asyncio.sleep(self._store.save_latency)
         self._store.rows(self.connection_id).append(record)
 
+    async def save_many(self, records: List[LogRecord]) -> List[Optional[str]]:
+        """Contrato de lote: un elemento por resultado, None si salió bien.
+
+        Vive acá y no parcheado desde `test_api_batch` porque el fake tiene que
+        cumplir toda la interfaz de LogRepository: si sólo lo define ese módulo,
+        cualquier otro test que ejercite el lote pasa o falla según si ese
+        archivo se importó, que es una dependencia invisible entre tests.
+        """
+
+        self._guard()
+        if self._store.save_latency:
+            await asyncio.sleep(self._store.save_latency)
+        self._store.rows(self.connection_id).extend(records)
+        return [None] * len(records)
+
     async def query(self, filters: LogFilters) -> List[LogRecord]:
         self._guard()
         rows = list(self._store.rows(self.connection_id))

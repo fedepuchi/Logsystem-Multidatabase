@@ -16,7 +16,15 @@ from app.storage.router import StorageRouter, UnboundSourceError
 # el resto —visor y demo— es administración. Por eso la dependencia va por ruta
 # y no colgada del router entero.
 router = APIRouter(prefix="/api/logs", tags=["Logs"])
-stats_router = APIRouter(prefix="/api", tags=["Logs"])
+
+# La dependencia va en el router y no en la ruta: /api/stats agrega los mismos
+# datos que el visor, así que tiene que exigir lo mismo que `GET /api/logs`.
+# Colgarla acá deja protegida por defecto cualquier ruta que se agregue después.
+stats_router = APIRouter(
+    prefix="/api",
+    tags=["Logs"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -51,12 +59,17 @@ async def create_log(
 async def create_logs_batch(
     payloads: List[Any] = Body(...),
     storage_router: StorageRouter = Depends(get_storage_router),
+    ingest_source: Optional[str] = Depends(require_ingest_source),
 ) -> Dict[str, Any]:
     """Ingesta parcial por lotes.
 
     Cada elemento se valida por separado para que un payload inválido no haga
     que FastAPI rechace el lote completo con 422. Los válidos se envían al
     router, que toma una sola vez el lock de cada fuente.
+
+    Autenticación: la credencial se exige igual que en la ingesta individual, y
+    la fuente se comprueba **elemento por elemento**. Un lote no es una vía para
+    escribir en fuentes ajenas colando registros de otra entre los propios.
     """
 
     settings = get_settings()
@@ -93,6 +106,23 @@ async def create_logs_batch(
                 ),
                 "connection_id": None,
                 "error": str(exc),
+            }
+            continue
+
+        # La fuente se valida acá y no con `ensure_source_matches`, que lanza
+        # 403 y tumbaría el lote entero: en un endpoint de resultados parciales
+        # el elemento ajeno se rechaza solo y los propios siguen entrando.
+        if ingest_source is not None and log.source_id != ingest_source:
+            output[index] = {
+                "index": index,
+                "success": False,
+                "id": None,
+                "source_id": log.source_id,
+                "connection_id": None,
+                "error": (
+                    f"La API key pertenece a {ingest_source} y el log declara "
+                    f"source_id={log.source_id}"
+                ),
             }
             continue
 

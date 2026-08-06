@@ -1,4 +1,5 @@
 import DbOriginBadge from "./DbOriginBadge";
+import EstadoTabla from "./EstadoTabla";
 import type { Connection, Engine, LogSummary } from "../api/client";
 
 interface LogTableProps {
@@ -7,6 +8,7 @@ interface LogTableProps {
   selectedId: string | null;
   onSelect: (log: LogSummary) => void;
   loading?: boolean;
+  error?: string | null;
 }
 
 function formatFecha(value: string): string {
@@ -20,17 +22,16 @@ export default function LogTable({
   selectedId,
   onSelect,
   loading,
+  error,
 }: LogTableProps) {
   const engineById = new Map<string, Engine>(
     connections.map((connection) => [connection.id, connection.engine]),
   );
 
-  if (loading) {
-    return <p>Cargando logs...</p>;
-  }
+  const sinFilas = logs.length === 0;
 
-  if (logs.length === 0) {
-    return <p>No hay logs para los filtros aplicados.</p>;
+  if (loading || error || sinFilas) {
+    return <EstadoTabla loading={loading} error={error} vacio={sinFilas} />;
   }
 
   return (

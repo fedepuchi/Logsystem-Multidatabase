@@ -118,6 +118,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(logs_api.router)
+    app.include_router(logs_api.stats_router)
     app.include_router(connections_api.router)
     app.include_router(sources_api.router)
 

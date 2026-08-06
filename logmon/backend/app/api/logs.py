@@ -16,6 +16,7 @@ from app.storage.router import StorageRouter, UnboundSourceError
 # el resto —visor y demo— es administración. Por eso la dependencia va por ruta
 # y no colgada del router entero.
 router = APIRouter(prefix="/api/logs", tags=["Logs"])
+stats_router = APIRouter(prefix="/api", tags=["Logs"])
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -165,7 +166,7 @@ async def get_logs(
     return await storage_router.query(filters)
 
 
-@router.get("/stats")
+@stats_router.get("/stats")
 async def get_stats(
     source: Optional[str] = None,
     fecha_inicio: Optional[datetime] = None,

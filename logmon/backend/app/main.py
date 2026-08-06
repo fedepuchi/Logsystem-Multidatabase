@@ -133,7 +133,42 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("shutdown completo")
 
 
+# Niveles aceptados en LOG_LEVEL. Explícito y no `getattr(logging, ...)`, que
+# con un valor raro devolvería cualquier atributo del módulo.
+NIVELES_LOG = {
+    "critical": logging.CRITICAL,
+    "error": logging.ERROR,
+    "warning": logging.WARNING,
+    "info": logging.INFO,
+    "debug": logging.DEBUG,
+}
+
+
+def nivel_de_log(valor: str) -> int:
+    return NIVELES_LOG.get(valor.strip().lower(), logging.INFO)
+
+
+def _configure_logging() -> None:
+    """Hace visibles los logs de la aplicación.
+
+    ``log_level`` estaba declarado en config.py y no lo leía nadie: bajo uvicorn
+    los ``logger.info`` del código no llegaban a ninguna salida. Un switch que
+    falla, un motor caído o la retención arrancando no dejaban rastro, que es
+    justo lo que hace falta para diagnosticar en una demo.
+
+    ``basicConfig`` no pisa una configuración ya existente, así que quien pase
+    su propio ``--log-config`` a uvicorn sigue mandando.
+    """
+
+    logging.basicConfig(
+        level=nivel_de_log(get_settings().log_level),
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+
 def create_app() -> FastAPI:
+    _configure_logging()
     settings = get_settings()
 
     app = FastAPI(

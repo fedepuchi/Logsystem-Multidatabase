@@ -123,6 +123,22 @@ export interface TestResult {
   message: string;
 }
 
+/** API key de ingesta de una fuente. El secreto no está: sólo su preview. */
+export interface ApiKey {
+  id: string;
+  source_id: string;
+  name: string;
+  preview: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+/** Alta de una key: la única respuesta que trae el secreto en texto plano. */
+export interface ApiKeyCreated extends ApiKey {
+  api_key: string;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly detail: unknown;
@@ -138,6 +154,53 @@ export class ApiError extends Error {
 const ENV = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
 const BASE_URL = (ENV?.VITE_API_URL ?? "").replace(/\/$/, "");
 
+const ADMIN_KEY_STORAGE = "logmon.adminKey";
+const ADMIN_HEADER = "X-Admin-Key";
+const INGEST_HEADER = "X-API-Key";
+
+function readStoredAdminKey(): string {
+  try {
+    return localStorage.getItem(ADMIN_KEY_STORAGE) ?? "";
+  } catch {
+    // Modo privado o entorno sin storage: la clave vive sólo en memoria.
+    return "";
+  }
+}
+
+let adminKey = readStoredAdminKey();
+
+/**
+ * Clave de administración del panel.
+ *
+ * Sólo abre la superficie de administración: la ingesta usa las API keys por
+ * fuente, que el panel emite pero no guarda (el backend guarda su hash y el
+ * secreto se muestra una única vez).
+ *
+ * Se persiste en localStorage para no tener que reescribirla en cada recarga.
+ * Es una credencial de operador en una máquina de operador; si el backend
+ * corre sin ADMIN_API_KEY, dejarla vacía es lo correcto.
+ */
+export const adminKeyStore = {
+  get: () => adminKey,
+
+  set(value: string) {
+    adminKey = value.trim();
+    try {
+      if (adminKey) {
+        localStorage.setItem(ADMIN_KEY_STORAGE, adminKey);
+      } else {
+        localStorage.removeItem(ADMIN_KEY_STORAGE);
+      }
+    } catch {
+      // Sin storage la clave igual queda activa en esta pestaña.
+    }
+  },
+
+  clear() {
+    this.set("");
+  },
+};
+
 function buildQuery(params: Record<string, string | number | undefined | null>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -149,14 +212,27 @@ function buildQuery(params: Record<string, string | number | undefined | null>):
   return qs ? `?${qs}` : "";
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
+/**
+ * Con qué credencial se firma la request.
+ *
+ * Los dos headers nunca viajan juntos: el backend separa administración de
+ * ingesta y responde 403 si se usa la credencial de la otra superficie.
+ */
+type Auth = { sourceKey?: string };
+
+async function request<T>(path: string, init?: RequestInit, auth: Auth = {}): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string> | undefined) ?? {}),
+  };
+
+  if (auth.sourceKey) {
+    headers[INGEST_HEADER] = auth.sourceKey;
+  } else if (adminKey) {
+    headers[ADMIN_HEADER] = adminKey;
+  }
+
+  const response = await fetch(`${BASE_URL}${path}`, { ...init, headers });
 
   if (!response.ok) {
     let detail: unknown = null;
@@ -236,6 +312,23 @@ export const sourcesApi = {
         body: JSON.stringify({ connection_id: connectionId }),
       },
     ),
+
+  /** Keys de ingesta de la fuente, vigentes y revocadas. */
+  keys: (name: string) =>
+    request<ApiKey[]>(`/api/sources/${encodeURIComponent(name)}/keys`),
+
+  /** Emite una key nueva. El `api_key` de la respuesta no se puede recuperar después. */
+  createKey: (name: string, keyName: string) =>
+    request<ApiKeyCreated>(`/api/sources/${encodeURIComponent(name)}/keys`, {
+      method: "POST",
+      body: JSON.stringify({ name: keyName }),
+    }),
+
+  revokeKey: (name: string, keyId: string) =>
+    request<void>(
+      `/api/sources/${encodeURIComponent(name)}/keys/${encodeURIComponent(keyId)}`,
+      { method: "DELETE" },
+    ),
 };
 
 export const logsApi = {
@@ -247,11 +340,20 @@ export const logsApi = {
       `/api/logs/${encodeURIComponent(id)}${buildQuery({ conn: connectionId })}`,
     ),
 
-  create: (input: LogCreateInput) =>
-    request<LogCreated>("/api/logs", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
+  /**
+   * Ingesta. Es la superficie de las aplicaciones monitoreadas, no la del
+   * panel: si el backend tiene la auth encendida hay que pasar la API key de
+   * la fuente, porque la clave de administración no habilita escribir logs.
+   */
+  create: (input: LogCreateInput, sourceKey?: string) =>
+    request<LogCreated>(
+      "/api/logs",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      { sourceKey },
+    ),
 
   demo: () =>
     request<{ message: string; result: Record<string, unknown> }>("/api/logs/demo", {

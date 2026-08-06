@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import ConnectionForm from "../components/ConnectionForm";
 import SourceAssign from "../components/SourceAssign";
+import SourceKeys from "../components/SourceKeys";
 import SwitchControl from "../components/SwitchControl";
 import {
   ApiError,
@@ -175,6 +176,10 @@ export default function Dashboard() {
             </tbody>
           </table>
         )}
+      </section>
+
+      <section className="dashboard__section">
+        <SourceKeys sources={sources} onError={reportError} />
       </section>
     </div>
   );

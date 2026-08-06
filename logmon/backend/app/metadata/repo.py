@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from app.ids import new_ulid
 from app.metadata.db import get_metadata_db
 from app.models import ConnectionIn, SourceIn
 
@@ -223,6 +225,115 @@ async def create_source(data: SourceIn) -> Dict[str, Any]:
 async def delete_source(source_id: str) -> None:
     db = get_metadata_db()
     await db.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+    await db.commit()
+
+
+# --------------------------------------------------------------------------
+# API keys de ingesta (una fuente puede tener varias)
+# --------------------------------------------------------------------------
+
+# Columnas que sí pueden salir de acá: nunca se selecciona key_hash salvo en la
+# resolución de una key presentada.
+_API_KEY_COLUMNS = "id, source_id, name, preview, created_at, last_used_at, revoked_at"
+
+
+def _utc_now_iso() -> str:
+    """Mismo formato que el DEFAULT de SQLite, para que las fechas se ordenen igual."""
+
+    now = datetime.now(timezone.utc)
+    return f"{now:%Y-%m-%dT%H:%M:%S}.{now.microsecond // 1000:03d}Z"
+
+
+async def create_api_key(source_id: str, name: str, key_hash: str, preview: str) -> Dict[str, Any]:
+    db = get_metadata_db()
+    key_id = new_ulid()
+
+    await db.execute(
+        """
+        INSERT INTO source_api_keys (id, source_id, name, preview, key_hash)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (key_id, source_id, name, preview, key_hash),
+    )
+    await db.commit()
+
+    created = await get_api_key(key_id)
+    assert created is not None
+    return created
+
+
+async def get_api_key(key_id: str) -> Optional[Dict[str, Any]]:
+    db = get_metadata_db()
+    async with db.execute(
+        f"SELECT {_API_KEY_COLUMNS} FROM source_api_keys WHERE id = ?",
+        (key_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _row_to_dict(row) if row is not None else None
+
+
+async def list_api_keys(source_id: str) -> List[Dict[str, Any]]:
+    db = get_metadata_db()
+    async with db.execute(
+        f"""
+        SELECT {_API_KEY_COLUMNS} FROM source_api_keys
+        WHERE source_id = ?
+        ORDER BY created_at DESC, id DESC
+        """,
+        (source_id,),
+    ) as cur:
+        return [_row_to_dict(row) for row in await cur.fetchall()]
+
+
+async def find_api_key_by_hash(key_hash: str) -> Optional[Dict[str, Any]]:
+    """Resuelve la key presentada en la request. Va por el índice UNIQUE del hash."""
+
+    db = get_metadata_db()
+    async with db.execute(
+        f"SELECT {_API_KEY_COLUMNS} FROM source_api_keys WHERE key_hash = ?",
+        (key_hash,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _row_to_dict(row) if row is not None else None
+
+
+async def revoke_api_key(key_id: str) -> None:
+    """Marca la key como revocada. La fila queda para el historial de uso."""
+
+    db = get_metadata_db()
+    await db.execute(
+        """
+        UPDATE source_api_keys
+        SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE id = ? AND revoked_at IS NULL
+        """,
+        (key_id,),
+    )
+    await db.commit()
+
+
+async def touch_api_key(key_id: str) -> None:
+    """Registra el último uso de la key.
+
+    La ingesta es el camino caliente y la metadata es un SQLite con una única
+    conexión compartida, así que escribir en cada log sería agregarle una
+    escritura serializada a cada request. El dato sólo se usa para responder
+    "¿esta key sigue viva?", así que se guarda con granularidad de minuto: se
+    actualiza sólo si el último uso registrado es de otro minuto.
+    """
+
+    now = _utc_now_iso()
+
+    db = get_metadata_db()
+    await db.execute(
+        """
+        UPDATE source_api_keys
+        SET last_used_at = ?
+        WHERE id = ?
+          AND (last_used_at IS NULL OR substr(last_used_at, 1, 16) <> substr(?, 1, 16))
+        """,
+        (now, key_id, now),
+    )
     await db.commit()
 
 

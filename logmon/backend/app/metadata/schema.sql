@@ -20,6 +20,23 @@ CREATE TABLE IF NOT EXISTS sources (
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+-- API keys de ingesta. Una fuente puede tener varias (rotación sin ventana de
+-- corte) y de cada una se guarda sólo el SHA-256: el texto plano se devuelve
+-- una única vez, al crearla. Revocar no borra la fila, la marca: así el panel
+-- sigue mostrando quién ingestó y hasta cuándo.
+CREATE TABLE IF NOT EXISTS source_api_keys (
+    id           TEXT PRIMARY KEY,
+    source_id    TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    preview      TEXT NOT NULL,
+    key_hash     TEXT NOT NULL UNIQUE,
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    last_used_at TEXT NULL,
+    revoked_at   TEXT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_source ON source_api_keys (source_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS source_bindings (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     source_id     TEXT    NOT NULL REFERENCES sources(id)     ON DELETE CASCADE,

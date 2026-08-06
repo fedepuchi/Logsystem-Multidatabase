@@ -137,3 +137,27 @@ class SourceIn(BaseModel):
 
 class SwitchIn(BaseModel):
     connection_id: str
+
+
+class ApiKeyIn(BaseModel):
+    """Alta de una API key de ingesta. El secreto lo genera el servidor."""
+
+    name: str = Field(default="", max_length=80)
+
+
+class ApiKey(BaseModel):
+    """Vista pública de una key: identifica sin permitir reconstruirla."""
+
+    id: str
+    source_id: str
+    name: str
+    preview: str
+    created_at: str
+    last_used_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+
+
+class ApiKeyCreated(ApiKey):
+    """Respuesta del alta: la única vez que el secreto viaja en texto plano."""
+
+    api_key: str

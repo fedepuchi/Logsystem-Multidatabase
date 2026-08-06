@@ -2,12 +2,20 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
+from app.api.auth import require_admin
 from app.api.dependencies import get_storage_router
 from app.metadata import repo
-from app.models import SourceIn, SwitchIn
+from app.models import ApiKey, ApiKeyCreated, ApiKeyIn, SourceIn, SwitchIn
+from app.security import generate_api_key, hash_api_key, key_preview
 from app.storage.router import StorageRouter, SwitchAborted
 
-router = APIRouter(prefix="/api/sources", tags=["Sources"])
+# Todo lo de fuentes es administración, incluida la emisión de las API keys con
+# las que después ingestan las aplicaciones.
+router = APIRouter(
+    prefix="/api/sources",
+    tags=["Sources"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 async def _get_source_or_404(source_name: str) -> Dict[str, Any]:
@@ -120,5 +128,67 @@ async def delete_source(
         )
 
     await repo.delete_source(source_name)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --------------------------------------------------------------------------
+# API keys de ingesta
+# --------------------------------------------------------------------------
+
+
+@router.get("/{source_name}/keys")
+async def list_source_keys(source_name: str) -> List[ApiKey]:
+    """Keys emitidas para la fuente, vigentes y revocadas.
+
+    El secreto no está: de cada key sólo se guardó el hash, así que acá viaja
+    el preview (los primeros caracteres) que alcanza para identificarla.
+    """
+
+    await _get_source_or_404(source_name)
+
+    return [ApiKey(**key) for key in await repo.list_api_keys(source_name)]
+
+
+@router.post("/{source_name}/keys", status_code=status.HTTP_201_CREATED)
+async def create_source_key(source_name: str, payload: ApiKeyIn) -> ApiKeyCreated:
+    """Emite una key nueva para la fuente.
+
+    Es la única respuesta donde el secreto viaja en texto plano: después ya no
+    se puede recuperar, sólo revocar y emitir otra. Una fuente puede tener
+    varias keys vivas a la vez, que es lo que permite rotarlas sin cortar la
+    ingesta: se emite la nueva, se despliega, y recién ahí se revoca la vieja.
+    """
+
+    await _get_source_or_404(source_name)
+
+    api_key = generate_api_key()
+    created = await repo.create_api_key(
+        source_id=source_name,
+        name=payload.name.strip(),
+        key_hash=hash_api_key(api_key),
+        preview=key_preview(api_key),
+    )
+
+    return ApiKeyCreated(**created, api_key=api_key)
+
+
+@router.delete("/{source_name}/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_source_key(source_name: str, key_id: str) -> Response:
+    """Revoca la key. La fila queda para poder auditar hasta cuándo se usó."""
+
+    await _get_source_or_404(source_name)
+
+    key = await repo.get_api_key(key_id)
+
+    # La comprobación de pertenencia evita que el id de una key de otra fuente
+    # se revoque desde la URL equivocada, aunque hoy quien llega acá ya es admin.
+    if key is None or key["source_id"] != source_name:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="API key no encontrada para esta fuente",
+        )
+
+    await repo.revoke_api_key(key_id)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -120,6 +120,12 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
 
+      # Clave de administración (header X-Admin-Key). Vacía = API abierta, que
+      # es como arranca la demo. La ingesta nunca usa esta clave: va con las
+      # API keys por fuente que se emiten desde el panel.
+      APP_ENV: ${APP_ENV:-development}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+
       MARIADB_HOST: mariadb
       MARIADB_PORT: 3306
       MARIADB_DATABASE: ${MARIADB_DATABASE:-logdb}

@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     # Lista separada por comas; se expone ya parseada en cors_origin_list.
     cors_origins: str = "http://localhost:5173,http://localhost:8000"
 
+    # Clave de la superficie de administración (header X-Admin-Key). Vacía
+    # apaga la autenticación entera —modo abierto de la demo— y app.main se
+    # niega a arrancar así si APP_ENV no es development. La ingesta no usa esta
+    # clave: cada fuente tiene sus propias API keys en la metadata.
+    admin_api_key: str = ""
+
     mariadb_host: str = "localhost"
     mariadb_port: int = 3306
     mariadb_user: str = "loguser"

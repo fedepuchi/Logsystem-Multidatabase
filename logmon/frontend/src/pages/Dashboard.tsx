@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import ConnectionForm from "../components/ConnectionForm";
+import HistorialSwitches from "../components/HistorialSwitches";
+import PanelMetricas from "../components/PanelMetricas";
 import SourceAssign from "../components/SourceAssign";
 import SourceKeys from "../components/SourceKeys";
 import SwitchControl from "../components/SwitchControl";
@@ -19,6 +21,7 @@ export default function Dashboard() {
   const [sources, setSources] = useState<Source[]>([]);
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [fuenteHistorial, setFuenteHistorial] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -180,6 +183,29 @@ export default function Dashboard() {
 
       <section className="dashboard__section">
         <SourceKeys sources={sources} onError={reportError} />
+      </section>
+
+      <section className="dashboard__section">
+        <h2>Métricas</h2>
+        <PanelMetricas />
+      </section>
+
+      <section className="dashboard__section">
+        <h2>Historial de cambios de motor</h2>
+        <label htmlFor="historial-fuente">Fuente</label>
+        <select
+          id="historial-fuente"
+          value={fuenteHistorial}
+          onChange={(event) => setFuenteHistorial(event.target.value)}
+        >
+          <option value="">Elegí una fuente…</option>
+          {sources.map((source) => (
+            <option key={source.name} value={source.name}>
+              {source.name}
+            </option>
+          ))}
+        </select>
+        <HistorialSwitches source={fuenteHistorial || null} />
       </section>
     </div>
   );

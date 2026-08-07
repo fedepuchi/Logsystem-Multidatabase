@@ -94,6 +94,25 @@ export interface LogCreated {
   tiempo_ms: number;
 }
 
+/** Agregados de `GET /api/stats`, calculados en el backend. */
+export interface LogStats {
+  generated_at: string;
+  bucket_minutes: number;
+  total_logs: number;
+  error_count: number;
+  error_rate: number;
+  engines: {
+    engine: string;
+    connection_ids: string[];
+    total_logs: number;
+    error_count: number;
+    error_rate: number;
+    volume: { start: string; total: number; errors: number }[];
+  }[];
+  /** Motores que no respondieron: el resto de los números los excluye. */
+  unavailable: string[];
+}
+
 export interface SourceHistory {
   source: string;
   connections: string[];
@@ -282,6 +301,18 @@ export const connectionsApi = {
     request<TestResult>(`/api/connections/${encodeURIComponent(id)}/test`, {
       method: "POST",
     }),
+};
+
+export const statsApi = {
+  /**
+   * Los agregados salen del backend y no de la página que se está viendo: si se
+   * calcularan en el cliente sobre los logs cargados, darían el total de esa
+   * página y no el real.
+   */
+  get: (source?: string) =>
+    request<LogStats>(
+      `/api/stats${source ? `?source=${encodeURIComponent(source)}` : ""}`,
+    ),
 };
 
 export const sourcesApi = {
